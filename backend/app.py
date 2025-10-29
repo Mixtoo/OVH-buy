@@ -2832,13 +2832,18 @@ def _get_server_price_internal(plan_code, datacenter='gra', options=None):
         # 提取每个商品的价格（安全访问）
         cart_items = []
         if cart_info and isinstance(cart_info, dict):
-            cart_items = cart_info.get("items", [])
+            items_field = cart_info.get("items")
+            # 确保items字段是列表类型
+            if isinstance(items_field, list):
+                cart_items = items_field
+            elif items_field is not None:
+                add_log("WARNING", f"购物车items字段类型异常: {type(items_field)}，预期list，跳过商品详情提取", "price")
         elif cart_info is not None:
             add_log("WARNING", f"购物车info类型异常: {type(cart_info)}，预期dict", "price")
         
         for item in cart_items:
             if not isinstance(item, dict):
-                add_log("WARNING", f"购物车项目类型异常: {type(item)}，预期dict，跳过", "price")
+                # 静默跳过非字典类型的项目（可能是API返回格式问题）
                 continue
             item_prices = item.get("prices", {})
             if not isinstance(item_prices, dict):
