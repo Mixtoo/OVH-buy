@@ -237,12 +237,24 @@ const LogsPage = () => {
             <p className="text-cyber-muted">没有日志记录</p>
           </div>
         ) : (
-          <div className="max-h-[400px] sm:max-h-[600px] overflow-y-auto overflow-x-hidden">
+          <div className="max-h-[calc(100vh-280px)] sm:max-h-[calc(100vh-250px)] overflow-y-auto overflow-x-hidden">
+            {/* 桌面端表格头部 */}
+            {!isMobile && filteredLogs.length > 0 && (
+              <div className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur-sm border-b border-cyber-grid/30 px-3 sm:px-4 py-2.5">
+                <div className="flex items-center gap-3 text-xs font-semibold text-cyber-muted">
+                  <div className="flex-shrink-0 w-12 text-right">#</div>
+                  <div className="flex-shrink-0 w-36">时间</div>
+                  <div className="flex-shrink-0 w-20">级别</div>
+                  <div className="flex-shrink-0 w-24">来源</div>
+                  <div className="flex-1">消息</div>
+                </div>
+              </div>
+            )}
             <div className="divide-y divide-cyber-grid/10">
               {filteredLogs.map((log, index) => (
                 <div
                   key={log.id}
-                  className="px-2 sm:px-3 py-2 hover:bg-cyber-grid/5 transition-colors"
+                  className="px-3 sm:px-4 py-2.5 hover:bg-cyber-grid/5 transition-colors"
                 >
                   {isMobile ? (
                     /* 移动端：卡片布局 */
@@ -278,14 +290,14 @@ const LogsPage = () => {
                     </div>
                   ) : (
                     /* 桌面端：列表布局 */
-                    <div className="flex items-start gap-2 text-xs">
+                    <div className="flex items-start gap-3 text-sm">
                       {/* 序号 */}
-                      <div className="flex-shrink-0 w-10 text-cyber-muted/60 text-right font-mono">
-                        {filteredLogs.length - index}
+                      <div className="flex-shrink-0 w-12 text-cyber-muted/60 text-right font-mono text-xs">
+                        #{filteredLogs.length - index}
                       </div>
                       
                       {/* 时间戳 */}
-                      <div className="flex-shrink-0 w-32 text-cyber-muted font-mono">
+                      <div className="flex-shrink-0 w-36 text-cyber-muted font-mono text-xs">
                         {new Date(log.timestamp).toLocaleString('zh-CN', {
                           month: '2-digit',
                           day: '2-digit',
@@ -298,18 +310,18 @@ const LogsPage = () => {
                       
                       {/* 级别 */}
                       <div className="flex-shrink-0">
-                        <span className={`inline-flex items-center justify-center w-16 px-1.5 py-0.5 rounded text-[10px] font-semibold ${getLogLevelStyle(log.level)}`}>
+                        <span className={`inline-flex items-center justify-center w-20 px-2 py-1 rounded text-xs font-semibold ${getLogLevelStyle(log.level)}`}>
                           {log.level}
                         </span>
                       </div>
                       
                       {/* 来源 */}
-                      <div className="flex-shrink-0 w-20 text-cyber-accent/80 font-mono text-[10px] truncate" title={log.source}>
-                        {log.source}
+                      <div className="flex-shrink-0 w-24 text-cyber-accent/80 font-mono text-xs truncate" title={log.source}>
+                        [{log.source}]
                       </div>
                       
                       {/* 消息 */}
-                      <div className="flex-1 text-slate-200 leading-relaxed break-words">
+                      <div className="flex-1 text-slate-200 leading-relaxed break-words min-w-0">
                         {log.message}
                       </div>
                     </div>
