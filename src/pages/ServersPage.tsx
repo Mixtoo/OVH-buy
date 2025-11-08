@@ -2122,30 +2122,66 @@ const ServersPage = () => {
                                   return (
                                     <div 
                                       key={dcCode}
-                                      className={`dc-bar group relative rounded-md cursor-pointer transition-all duration-200 border p-2 flex items-center justify-between ${
+                                      className={`dc-bar group relative rounded-md cursor-pointer transition-all duration-300 border p-2.5 flex items-center justify-between overflow-hidden ${
                                         isSelected 
-                                          ? 'border-cyber-accent bg-cyber-accent/10 shadow-sm' 
-                                          : 'border-slate-700/50 bg-slate-800/40 hover:border-slate-600 hover:bg-slate-800/60'
+                                          ? 'border-cyber-accent bg-gradient-to-r from-cyber-accent/15 to-cyber-accent/5 shadow-lg shadow-cyber-accent/20 scale-[1.02]' 
+                                          : 'border-slate-700/50 bg-gradient-to-r from-slate-800/50 to-slate-800/30 hover:border-cyber-accent/50 hover:bg-gradient-to-r hover:from-slate-700/60 hover:to-slate-800/50 hover:shadow-md hover:scale-[1.01]'
                                       }`}
                                       onClick={(e) => toggleDatacenterSelection(server.planCode, dcCode, e)}
                                       title={`${dc.name} (${dc.region}) - ${statusText}`}
                                     >
-                                      <div className="flex items-center gap-2">
+                                      {/* 选中时的光晕效果 */}
+                                      {isSelected && (
+                                        <div className="absolute inset-0 bg-cyber-accent/10 animate-pulse rounded-md"></div>
+                                      )}
+                                      
+                                      {/* 悬停时的背景动画 */}
+                                      <div className="absolute inset-0 bg-gradient-to-r from-cyber-accent/0 via-cyber-accent/5 to-cyber-accent/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 rounded-md"></div>
+                                      
+                                      <div className="flex items-center gap-2 relative z-10">
                                         <div>
-                                          <span className={`font-bold tracking-wide ${ isSelected ? 'text-cyber-accent' : 'text-slate-200' }`}>
+                                          <span className={`font-bold tracking-wide transition-colors duration-300 ${
+                                            isSelected 
+                                              ? 'text-cyber-accent drop-shadow-[0_0_4px_rgba(100,255,218,0.5)]' 
+                                              : 'text-slate-200 group-hover:text-cyber-accent/80'
+                                          }`}>
                                             {dcCode}
                                           </span>
-                                          <span className="text-xs text-slate-400 ml-1.5 hidden sm:inline">{dc.name}</span>
+                                          <span className={`text-xs ml-1.5 hidden sm:inline transition-colors duration-300 ${
+                                            isSelected ? 'text-slate-300' : 'text-slate-400 group-hover:text-slate-300'
+                                          }`}>
+                                            {dc.name}
+                                          </span>
                                         </div>
                                       </div>
-                                      <div className={`flex items-center gap-1.5 text-xs font-medium ${statusColor}`}>
+                                      
+                                      <div className={`flex items-center gap-1.5 text-xs font-medium relative z-10 ${statusColor}`}>
                                         <span 
-                                          className={`w-2 h-2 rounded-full ${ statusBgColor } ${ availStatus === "unavailable" || availStatus === "unknown" ? '' : 'animate-pulse' }`}
+                                          className={`w-2.5 h-2.5 rounded-full ${ statusBgColor } ${
+                                            availStatus === "unavailable" || availStatus === "unknown" 
+                                              ? '' 
+                                              : 'animate-pulse shadow-lg'
+                                          } ${
+                                            availStatus === "unavailable" 
+                                              ? 'shadow-red-400/50' 
+                                              : availStatus !== "unknown"
+                                              ? 'shadow-green-400/50'
+                                              : 'shadow-yellow-400/50'
+                                          }`}
                                         ></span>
-                                        <span>
+                                        <span className="font-semibold">
                                           {statusText}
                                         </span>
                                       </div>
+                                      
+                                      {/* 选中时的勾选标记 */}
+                                      {isSelected && (
+                                        <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-cyber-accent flex items-center justify-center shadow-lg shadow-cyber-accent/50 transition-all duration-200 scale-100">
+                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgb(15, 23, 42)" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                                            <polyline points="20 6 9 17 4 12"></polyline>
+                                          </svg>
+                                        </div>
+                                      )}
                                     </div>
                                   );
                                 })}
