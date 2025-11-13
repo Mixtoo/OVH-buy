@@ -276,11 +276,11 @@ class ServerMonitor:
                                     # 启动价格获取线程（异步，不阻塞通知发送）
                                     price_thread = threading.Thread(target=fetch_price, daemon=True)
                                     price_thread.start()
-                                    # 缩短超时时间到10秒，避免长时间阻塞通知发送
-                                    price_thread.join(timeout=10.0)  # 最多等待10秒
+                                    # 超时时间15秒，给价格查询更多时间
+                                    price_thread.join(timeout=15.0)  # 最多等待15秒
                                     
                                     if price_thread.is_alive():
-                                        self.add_log("WARNING", f"价格获取超时（10秒），发送不带价格的通知", "monitor")
+                                        self.add_log("WARNING", f"价格获取超时（15秒），发送不带价格的通知", "monitor")
                                     else:
                                         try:
                                             price_text = price_queue.get_nowait()
@@ -307,6 +307,49 @@ class ServerMonitor:
                             # 检查plan_code是否为有效（历史上有过价格查询成功）
                             is_valid_plan_code = plan_code in self.valid_plan_codes
                             
+                            # 如果plan_code无效，先查询一次价格（只查询一次，不管有多少个机房）
+                            # 同配置不同机房价格相同，查询一次即可
+                            if not is_valid_plan_code and available_notifications:
+                                # 找出第一个有货的数据中心用于价格查询
+                                first_available_dc = None
+                                for notif in available_notifications:
+                                    if notif["change_type"] == "available" and notif["status"] != "unavailable":
+                                        first_available_dc = notif["dc"]
+                                        break
+                                
+                                if first_available_dc:
+                                    # 使用配置级 options（若存在），否则留空让后端自动匹配
+                                    order_options = (config_info.get("options") if config_info else []) or []
+                                    
+                                    # 先查询一次价格，验证plan_code是否有效（使用第一个机房，只查询一次）
+                                    self.add_log("INFO", f"[monitor->order] plan_code未标记为有效，先查询一次价格验证（同配置只查一次）: {plan_code}@{first_available_dc}, options={order_options}", "monitor")
+                                    
+                                    try:
+                                        # 调用内部价格查询API，只验证价格，不实际下单
+                                        price_api_url = "http://127.0.0.1:19998/api/internal/monitor/price"
+                                        price_payload = {
+                                            "plan_code": plan_code,
+                                            "datacenter": first_available_dc,
+                                            "options": order_options
+                                        }
+                                        
+                                        price_resp = requests.post(price_api_url, json=price_payload, timeout=15)
+                                        
+                                        # 如果价格查询成功，标记plan_code为有效
+                                        if price_resp.status_code == 200:
+                                            price_result = price_resp.json()
+                                            if price_result.get("success") and price_result.get("price"):
+                                                self.valid_plan_codes.add(plan_code)
+                                                is_valid_plan_code = True
+                                                self.add_log("INFO", f"[monitor->order] 价格验证成功，标记plan_code为有效: {plan_code}，后续所有机房将跳过价格核验", "monitor")
+                                            else:
+                                                self.add_log("WARNING", f"[monitor->order] 价格验证失败: {price_result.get('error', '未知错误')}", "monitor")
+                                        else:
+                                            self.add_log("WARNING", f"[monitor->order] 价格验证请求失败({price_resp.status_code}): {price_resp.text}", "monitor")
+                                    except requests.exceptions.RequestException as e:
+                                        self.add_log("WARNING", f"[monitor->order] 价格验证请求异常: {str(e)}", "monitor")
+                            
+                            # 对所有有货的机房进行下单（如果plan_code已标记为有效，都跳过价格核验）
                             for notif in available_notifications:
                                 dc_to_order = notif["dc"]
                                 # 使用配置级 options（若存在），否则留空让后端自动匹配
@@ -343,6 +386,14 @@ class ServerMonitor:
                         server_name = subscription.get("serverName")
                         
                         # 创建包含价格的配置信息副本
+                        # 如果价格查询超时或失败，再次尝试从缓存获取（可能在查询过程中已缓存）
+                        if not price_text and config_info:
+                            options = config_info.get("options", [])
+                            cached_price = self._get_cached_price(plan_code, options)
+                            if cached_price:
+                                price_text = cached_price
+                                self.add_log("DEBUG", f"价格查询超时后从缓存获取: {price_text}", "monitor")
+                        
                         config_info_with_price = config_info.copy() if config_info else None
                         if config_info_with_price:
                             config_info_with_price["cached_price"] = price_text  # 传递缓存的价格
@@ -663,6 +714,14 @@ class ServerMonitor:
             if config_info and "cached_price" in config_info:
                 price_text = config_info.get("cached_price")
             
+            # 如果没有传递的价格，尝试从缓存中获取
+            if not price_text and config_info:
+                options = config_info.get("options", [])
+                cached_price = self._get_cached_price(plan_code, options)
+                if cached_price:
+                    price_text = cached_price
+                    self.add_log("DEBUG", f"汇总通知使用缓存价格: {price_text}", "monitor")
+            
             if price_text:
                 message += f"\n💰 价格: {price_text}\n"
             
@@ -855,12 +914,12 @@ class ServerMonitor:
                         # 启动价格获取线程（异步，不阻塞通知发送）
                         price_thread = threading.Thread(target=fetch_price, daemon=True)
                         price_thread.start()
-                        # 缩短超时时间到10秒，避免长时间阻塞通知发送
-                        price_thread.join(timeout=10.0)  # 最多等待10秒
+                        # 超时时间15秒，给价格查询更多时间
+                        price_thread.join(timeout=15.0)  # 最多等待15秒
                         
                         if price_thread.is_alive():
                             # 如果线程还在运行，说明超时了，直接发送通知（不等待价格）
-                            self.add_log("WARNING", f"价格获取超时（10秒），发送不带价格的通知", "monitor")
+                            self.add_log("WARNING", f"价格获取超时（15秒），发送不带价格的通知", "monitor")
                             price_text = None
                         else:
                             # 尝试获取结果（如果线程完成）
