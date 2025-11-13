@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta
 import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class ServerMonitor:
@@ -153,7 +154,11 @@ class ServerMonitor:
             self.add_log("INFO", f"订阅 {plan_code} - 监控数据中心: {monitored_dcs if monitored_dcs else '全部'}", "monitor")
             self.add_log("INFO", f"订阅 {plan_code} - 当前发现 {len(current_availability)} 个配置组合", "monitor")
             
-            # 遍历当前所有配置组合
+            # 收集所有需要查询价格的配置（用于并发执行）
+            price_query_tasks = []
+            config_results = {}  # 存储每个配置的处理结果
+            
+            # 遍历当前所有配置组合，收集任务
             for config_key, config_data in current_availability.items():
                 # config_key 格式: "plancode.memory.storage" 或 "datacenter"
                 # config_data 格式: {"datacenters": {"dc1": "status1", ...}, "memory": "xxx", "storage": "xxx"}
@@ -259,125 +264,192 @@ class ServerMonitor:
                                 price_text = cached_price
                                 self.add_log("DEBUG", f"配置 {config_display} 使用缓存价格: {price_text}", "monitor")
                             else:
-                                # 缓存不存在，异步查询价格
+                                # 缓存不存在，异步查询价格（使用线程池并发执行）
                                 try:
-                                    import threading
-                                    import queue
-                                    price_queue = queue.Queue()
-                                    
-                                    def fetch_price():
+                                    def fetch_price_task():
+                                        """价格查询任务（用于并发执行）"""
                                         try:
                                             price_result = self._get_price_info(plan_code, first_available_dc, config_info)
-                                            price_queue.put(price_result)
+                                            return price_result
                                         except Exception as e:
-                                            self.add_log("WARNING", f"价格获取线程异常: {str(e)}", "monitor")
-                                            price_queue.put(None)
+                                            self.add_log("WARNING", f"配置 {config_display} 价格获取异常: {str(e)}", "monitor")
+                                            return None
                                     
-                                    # 启动价格获取线程（异步，不阻塞通知发送）
-                                    price_thread = threading.Thread(target=fetch_price, daemon=True)
-                                    price_thread.start()
-                                    # 超时时间15秒，给价格查询更多时间
-                                    price_thread.join(timeout=15.0)  # 最多等待15秒
-                                    
-                                    if price_thread.is_alive():
-                                        self.add_log("WARNING", f"价格获取超时（15秒），发送不带价格的通知", "monitor")
-                                    else:
-                                        try:
-                                            price_text = price_queue.get_nowait()
-                                        except queue.Empty:
-                                            pass
-                                    
-                                    if price_text:
-                                        self.add_log("DEBUG", f"配置 {config_display} 价格获取成功: {price_text}，将在所有通知中复用", "monitor")
-                                    else:
-                                        self.add_log("WARNING", f"配置 {config_display} 价格获取失败，通知中不包含价格信息", "monitor")
+                                    # 收集到任务列表，稍后并发查询
+                                    price_query_tasks.append({
+                                        "config_key": config_key,
+                                        "config_info": config_info,
+                                        "config_display": config_display,
+                                        "plan_code": plan_code,
+                                        "first_available_dc": first_available_dc,
+                                        "notifications_to_send": notifications_to_send,
+                                        "fetch_func": fetch_price_task
+                                    })
+                                    # 先存储配置结果，价格稍后填充
+                                    config_results[config_key] = {
+                                        "config_info": config_info,
+                                        "notifications_to_send": notifications_to_send,
+                                        "price_text": None  # 稍后填充
+                                    }
                                 except Exception as e:
                                     self.add_log("WARNING", f"价格获取过程异常: {str(e)}", "monitor")
-                    
-                    # 按change_type分组发送通知（汇总同一配置的所有有货机房）
-                    available_notifications = [n for n in notifications_to_send if n["change_type"] == "available"]
-                    unavailable_notifications = [n for n in notifications_to_send if n["change_type"] == "unavailable"]
-                    
-                    # 在发送有货通知之前，优先尝试下单（仅当订阅开启 autoOrder）
-                    if available_notifications and subscription.get("autoOrder"):
+                                    config_results[config_key] = {
+                                        "config_info": config_info,
+                                        "notifications_to_send": notifications_to_send,
+                                        "price_text": None
+                                    }
+                            else:
+                                # 没有有货的数据中心，不需要查询价格
+                                config_results[config_key] = {
+                                    "config_info": config_info,
+                                    "notifications_to_send": notifications_to_send,
+                                    "price_text": None
+                                }
+                        else:
+                            # 没有通知需要发送，不需要查询价格
+                            config_results[config_key] = {
+                                "config_info": config_info,
+                                "notifications_to_send": notifications_to_send,
+                                "price_text": None
+                            }
+                    else:
+                        # 没有通知需要发送
+                        config_results[config_key] = {
+                            "config_info": config_info,
+                            "notifications_to_send": notifications_to_send,
+                            "price_text": None
+                        }
+            
+            # 并发查询所有需要查询价格的配置
+            if price_query_tasks:
+                self.add_log("INFO", f"并发查询 {len(price_query_tasks)} 个配置的价格", "monitor")
+                with ThreadPoolExecutor(max_workers=min(len(price_query_tasks), 10)) as executor:
+                    # 提交所有价格查询任务
+                    future_to_task = {executor.submit(task["fetch_func"]): task for task in price_query_tasks}
+                    # 等待所有任务完成并收集结果
+                    for future in as_completed(future_to_task):
+                        task = future_to_task[future]
+                        config_key = task["config_key"]
+                        config_display = task["config_display"]
                         try:
-                            import requests
-                            from api_key_config import API_SECRET_KEY
-                            
-                            # 检查plan_code是否为有效（历史上有过价格查询成功）
-                            is_valid_plan_code = plan_code in self.valid_plan_codes
-                            
-                            # 如果plan_code无效，先查询一次价格（只查询一次，不管有多少个机房）
-                            # 同配置不同机房价格相同，查询一次即可
-                            if not is_valid_plan_code and available_notifications:
-                                # 找出第一个有货的数据中心用于价格查询
-                                first_available_dc = None
-                                for notif in available_notifications:
-                                    if notif["change_type"] == "available" and notif["status"] != "unavailable":
-                                        first_available_dc = notif["dc"]
-                                        break
-                                
-                                if first_available_dc:
-                                    # 使用配置级 options（若存在），否则留空让后端自动匹配
-                                    order_options = (config_info.get("options") if config_info else []) or []
-                                    
-                                    # 先查询一次价格，验证plan_code是否有效（使用第一个机房，只查询一次）
-                                    self.add_log("INFO", f"[monitor->order] plan_code未标记为有效，先查询一次价格验证（同配置只查一次）: {plan_code}@{first_available_dc}, options={order_options}", "monitor")
-                                    
-                                    try:
-                                        # 调用内部价格查询API，只验证价格，不实际下单
-                                        price_api_url = "http://127.0.0.1:19998/api/internal/monitor/price"
-                                        price_payload = {
-                                            "plan_code": plan_code,
-                                            "datacenter": first_available_dc,
-                                            "options": order_options
-                                        }
-                                        
-                                        price_resp = requests.post(price_api_url, json=price_payload, timeout=15)
-                                        
-                                        # 如果价格查询成功，标记plan_code为有效
-                                        if price_resp.status_code == 200:
-                                            price_result = price_resp.json()
-                                            if price_result.get("success") and price_result.get("price"):
-                                                self.valid_plan_codes.add(plan_code)
-                                                is_valid_plan_code = True
-                                                self.add_log("INFO", f"[monitor->order] 价格验证成功，标记plan_code为有效: {plan_code}，后续所有机房将跳过价格核验", "monitor")
-                                            else:
-                                                self.add_log("WARNING", f"[monitor->order] 价格验证失败: {price_result.get('error', '未知错误')}", "monitor")
-                                        else:
-                                            self.add_log("WARNING", f"[monitor->order] 价格验证请求失败({price_resp.status_code}): {price_resp.text}", "monitor")
-                                    except requests.exceptions.RequestException as e:
-                                        self.add_log("WARNING", f"[monitor->order] 价格验证请求异常: {str(e)}", "monitor")
-                            
-                            # 对所有有货的机房进行下单（如果plan_code已标记为有效，都跳过价格核验）
+                            price_text = future.result(timeout=15.0)
+                            if price_text:
+                                config_results[config_key]["price_text"] = price_text
+                                self.add_log("DEBUG", f"配置 {config_display} 价格获取成功: {price_text}", "monitor")
+                            else:
+                                self.add_log("WARNING", f"配置 {config_display} 价格获取失败，通知中不包含价格信息", "monitor")
+                        except Exception as e:
+                            self.add_log("WARNING", f"配置 {config_display} 价格查询任务异常: {str(e)}", "monitor")
+            
+            # 处理所有配置的结果（发送通知、下单等）
+            for config_key, result in config_results.items():
+                config_info = result["config_info"]
+                notifications_to_send = result["notifications_to_send"]
+                price_text = result["price_text"]
+                config_display = config_info.get("display", "") if config_info else ""
+                
+                # 按change_type分组发送通知（汇总同一配置的所有有货机房）
+                available_notifications = [n for n in notifications_to_send if n["change_type"] == "available"]
+                unavailable_notifications = [n for n in notifications_to_send if n["change_type"] == "unavailable"]
+                
+                # 在发送有货通知之前，优先尝试下单（仅当订阅开启 autoOrder）
+                if available_notifications and subscription.get("autoOrder"):
+                    try:
+                        import requests
+                        from api_key_config import API_SECRET_KEY
+                        
+                        # 检查plan_code是否为有效（历史上有过价格查询成功）
+                        is_valid_plan_code = plan_code in self.valid_plan_codes
+                        
+                        # 如果plan_code无效，先查询一次价格（只查询一次，不管有多少个机房）
+                        # 同配置不同机房价格相同，查询一次即可
+                        if not is_valid_plan_code and available_notifications:
+                            # 找出第一个有货的数据中心用于价格查询
+                            first_available_dc = None
                             for notif in available_notifications:
-                                dc_to_order = notif["dc"]
+                                if notif["change_type"] == "available" and notif["status"] != "unavailable":
+                                    first_available_dc = notif["dc"]
+                                    break
+                            
+                            if first_available_dc:
                                 # 使用配置级 options（若存在），否则留空让后端自动匹配
                                 order_options = (config_info.get("options") if config_info else []) or []
-                                payload = {
-                                    "planCode": plan_code,
-                                    "datacenter": dc_to_order,
-                                    "options": order_options,
-                                    "skipPriceCheck": is_valid_plan_code  # 如果plan_code有效，跳过价格核验
-                                }
-                                headers = {"X-API-Key": API_SECRET_KEY}
-                                api_url = "http://127.0.0.1:19998/api/config-sniper/quick-order"
                                 
-                                if is_valid_plan_code:
-                                    self.add_log("INFO", f"[monitor->order] 尝试快速下单（跳过价格核验）: {plan_code}@{dc_to_order}, options={order_options}", "monitor")
-                                else:
-                                    self.add_log("INFO", f"[monitor->order] 尝试快速下单: {plan_code}@{dc_to_order}, options={order_options}", "monitor")
+                                # 先查询一次价格，验证plan_code是否有效（使用第一个机房，只查询一次）
+                                self.add_log("INFO", f"[monitor->order] plan_code未标记为有效，先查询一次价格验证（同配置只查一次）: {plan_code}@{first_available_dc}, options={order_options}", "monitor")
                                 
                                 try:
-                                    resp = requests.post(api_url, json=payload, headers=headers, timeout=30)
-                                    if resp.status_code == 200:
-                                        self.add_log("INFO", f"[monitor->order] 快速下单成功: {plan_code}@{dc_to_order}", "monitor")
+                                    # 调用内部价格查询API，只验证价格，不实际下单
+                                    price_api_url = "http://127.0.0.1:19998/api/internal/monitor/price"
+                                    price_payload = {
+                                        "plan_code": plan_code,
+                                        "datacenter": first_available_dc,
+                                        "options": order_options
+                                    }
+                                    
+                                    price_resp = requests.post(price_api_url, json=price_payload, timeout=15)
+                                    
+                                    # 如果价格查询成功，标记plan_code为有效
+                                    if price_resp.status_code == 200:
+                                        price_result = price_resp.json()
+                                        if price_result.get("success") and price_result.get("price"):
+                                            self.valid_plan_codes.add(plan_code)
+                                            is_valid_plan_code = True
+                                            self.add_log("INFO", f"[monitor->order] 价格验证成功，标记plan_code为有效: {plan_code}，后续所有机房将跳过价格核验", "monitor")
+                                        else:
+                                            self.add_log("WARNING", f"[monitor->order] 价格验证失败: {price_result.get('error', '未知错误')}", "monitor")
                                     else:
-                                        self.add_log("WARNING", f"[monitor->order] 快速下单失败({resp.status_code}): {resp.text}", "monitor")
+                                        self.add_log("WARNING", f"[monitor->order] 价格验证请求失败({price_resp.status_code}): {price_resp.text}", "monitor")
                                 except requests.exceptions.RequestException as e:
-                                    self.add_log("WARNING", f"[monitor->order] 快速下单请求异常: {str(e)}", "monitor")
-                        except Exception as e:
-                            self.add_log("WARNING", f"[monitor->order] 下单前置流程异常: {str(e)}", "monitor")
+                                    self.add_log("WARNING", f"[monitor->order] 价格验证请求异常: {str(e)}", "monitor")
+                        
+                        # 对所有有货的机房进行并发下单（如果plan_code已标记为有效，都跳过价格核验）
+                        def place_order(notif):
+                            """下单函数（用于并发执行）"""
+                            dc_to_order = notif["dc"]
+                            # 使用配置级 options（若存在），否则留空让后端自动匹配
+                            order_options = (config_info.get("options") if config_info else []) or []
+                            payload = {
+                                "planCode": plan_code,
+                                "datacenter": dc_to_order,
+                                "options": order_options,
+                                "skipPriceCheck": is_valid_plan_code  # 如果plan_code有效，跳过价格核验
+                            }
+                            headers = {"X-API-Key": API_SECRET_KEY}
+                            api_url = "http://127.0.0.1:19998/api/config-sniper/quick-order"
+                            
+                            if is_valid_plan_code:
+                                self.add_log("INFO", f"[monitor->order] 尝试快速下单（跳过价格核验）: {plan_code}@{dc_to_order}, options={order_options}", "monitor")
+                            else:
+                                self.add_log("INFO", f"[monitor->order] 尝试快速下单: {plan_code}@{dc_to_order}, options={order_options}", "monitor")
+                            
+                            try:
+                                resp = requests.post(api_url, json=payload, headers=headers, timeout=30)
+                                if resp.status_code == 200:
+                                    self.add_log("INFO", f"[monitor->order] 快速下单成功: {plan_code}@{dc_to_order}", "monitor")
+                                    return True
+                                else:
+                                    self.add_log("WARNING", f"[monitor->order] 快速下单失败({resp.status_code}): {resp.text}", "monitor")
+                                    return False
+                            except requests.exceptions.RequestException as e:
+                                self.add_log("WARNING", f"[monitor->order] 快速下单请求异常: {str(e)}", "monitor")
+                                return False
+                        
+                        # 使用线程池并发执行所有下单请求
+                        if available_notifications:
+                            self.add_log("INFO", f"[monitor->order] 并发执行 {len(available_notifications)} 个下单请求", "monitor")
+                            with ThreadPoolExecutor(max_workers=min(len(available_notifications), 10)) as executor:
+                                # 提交所有下单任务
+                                future_to_notif = {executor.submit(place_order, notif): notif for notif in available_notifications}
+                                # 等待所有任务完成（不阻塞，但会等待结果）
+                                for future in as_completed(future_to_notif):
+                                    notif = future_to_notif[future]
+                                    try:
+                                        result = future.result()
+                                    except Exception as e:
+                                        self.add_log("WARNING", f"[monitor->order] 下单任务异常: {plan_code}@{notif['dc']}, {str(e)}", "monitor")
+                    except Exception as e:
+                        self.add_log("WARNING", f"[monitor->order] 下单前置流程异常: {str(e)}", "monitor")
                     
                     # 发送有货通知（汇总所有有货的机房到一个通知，带按钮）
                     if available_notifications:

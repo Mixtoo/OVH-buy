@@ -4468,8 +4468,9 @@ def quick_order():
                     # ISO 字符串 -> epoch
                     recent = datetime.fromisoformat(ts).timestamp() if isinstance(ts, str) else None
                     if recent and (now_ts - recent) < duplicate_window_seconds:
+                        remaining_seconds = int(duplicate_window_seconds - (now_ts - recent))
                         add_log("INFO", f"检测到近期成功订单（含配置，{int(now_ts - recent)}秒内），拒绝再次入队: {plancode}@{datacenter} options={options}", "config_sniper")
-                        return jsonify({"success": False, "error": "刚刚已成功下过同配置订单，稍后再试"}), 429
+                        return jsonify({"success": False, "error": f"同机房2分钟内限制：刚刚已成功下过同配置订单（{datacenter}），请等待 {remaining_seconds} 秒后再试"}), 429
                 except Exception:
                     pass
 
