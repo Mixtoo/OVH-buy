@@ -205,9 +205,30 @@ class ServerMonitor:
                         status_key = f"{dc}|{config_key}"
                         old_status = last_status.get(status_key)
                         
+                        # ✅ 添加调试日志，帮助定位问题
+                        if old_status is None and status != "unavailable":
+                            self.add_log("DEBUG", f"[状态检测] {status_key}: old_status=None, status={status}, 可能是首次检查或状态键不匹配", "monitor")
+                        
                         # 检查是否需要发送通知（包括首次检查）
                         status_changed = False
                         change_type = None
+                        
+                        # ✅ 如果开启了自动下单，且 old_status 是 None，但 status 不是 unavailable
+                        # 需要检查是否已经下过单（通过检查 lastStatus 中是否有其他状态键）
+                        # 这样可以避免在持续有货的情况下，因为状态键不匹配而重复触发
+                        if old_status is None and status != "unavailable" and subscription.get("autoOrder"):
+                            # 检查是否有其他状态键存在（说明不是真正的首次检查）
+                            has_other_status = any(
+                                key != status_key and value != "unavailable" 
+                                for key, value in last_status.items()
+                            )
+                            if has_other_status:
+                                # 不是真正的首次检查，可能是状态键不匹配
+                                # 不触发状态变化，避免重复下单
+                                self.add_log("WARNING", f"[状态检测] {status_key}: 检测到状态键不匹配（old_status=None但存在其他状态），跳过触发，避免重复下单", "monitor")
+                                # 直接更新状态，不触发通知和下单
+                                # 注意：状态会在检查循环末尾统一更新，这里不需要手动更新
+                                continue
                         
                         # 首次检查时也发送通知（如果配置允许）
                         if old_status is None:
@@ -621,7 +642,9 @@ class ServerMonitor:
                     subscription["history"] = subscription["history"][-100:]
             
             # 更新状态（需要转换为状态字典）
-            new_last_status = {}
+            # ✅ 使用合并而不是替换，保留自动下单后立即更新的状态
+            # 这样可以避免状态键不匹配导致重复触发的问题
+            new_last_status = subscription.get("lastStatus", {}).copy()  # 先复制现有状态
             for config_key, config_data in current_availability.items():
                 if isinstance(config_data, str):
                     # 简单的数据中心状态
@@ -630,7 +653,11 @@ class ServerMonitor:
                     # 配置级别的状态
                     for dc, status in config_data["datacenters"].items():
                         status_key = f"{dc}|{config_key}"
+                        old_status_value = new_last_status.get(status_key)
                         new_last_status[status_key] = status
+                        # 添加调试日志，帮助定位问题
+                        if old_status_value != status:
+                            self.add_log("DEBUG", f"[状态更新] {status_key}: {old_status_value} -> {status}", "monitor")
             
             subscription["lastStatus"] = new_last_status
             
