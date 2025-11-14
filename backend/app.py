@@ -2488,6 +2488,7 @@ def add_subscription():
         add_log("WARNING", f"获取服务器名称失败: {str(e)}", "monitor")
     
     auto_order_quantity = data.get("autoOrderQuantity", 0)  # 自动下单数量，0表示不限制（遵循2分钟限制）
+    add_log("INFO", f"[monitor] 添加订阅: planCode={plan_code}, autoOrder={auto_order}, autoOrderQuantity={auto_order_quantity}, 接收到的数据: {list(data.keys())}", "monitor")
     monitor.add_subscription(plan_code, datacenters, notify_available, notify_unavailable, server_name, None, None, auto_order, auto_order_quantity)
     save_subscriptions()
     

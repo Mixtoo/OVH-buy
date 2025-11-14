@@ -450,6 +450,19 @@ class ServerMonitor:
                                 for i in range(order_count):
                                     future = executor.submit(place_order, notif, i)
                                     future_to_notif[future] = (notif, i)
+                            # ✅ 自动下单后，立即更新状态，避免下次检查时重复触发
+                            # 在提交下单任务后立即更新状态，不管下单是否成功
+                            # 这样下次检查时 old_status 和 status 相同，不会触发状态变化，避免重复下单
+                            for notif in available_notifications:
+                                status_key = notif.get("status_key")
+                                if status_key:
+                                    # 立即更新状态，避免下次检查时重复触发
+                                    # 使用当前状态作为新状态，这样下次检查时 old_status 和 status 相同，不会触发状态变化
+                                    current_status = notif.get("status")
+                                    if current_status and current_status != "unavailable":
+                                        subscription["lastStatus"][status_key] = current_status
+                                        self.add_log("INFO", f"[monitor->order] 自动下单后立即更新状态: {status_key} = {current_status}，避免重复触发", "monitor")
+                            
                             # 等待所有任务完成（不阻塞，但会等待结果）
                             for future in as_completed(future_to_notif):
                                 notif, order_index = future_to_notif[future]
