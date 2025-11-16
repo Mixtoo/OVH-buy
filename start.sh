@@ -86,7 +86,7 @@ if ! kill -0 $BACK_PID 2>/dev/null; then
     echo "错误：后端服务启动失败。请查看日志：$BACKEND_DIR/backend/logs/app.log"
     exit 1
 fi
-echo "后端服务已启动，进程 PID：$BACK_PID"
+echo "后端服务已启动，进程 PID:$BACK_PID"
 
 
 # --- 前端环境搭建 ---
@@ -94,17 +94,17 @@ cd "$ROOT_DIR"
 echo "--- 准备前端环境 ---"
 
 if [ ! -d "node_modules" ]; then
-  echo "正在安装前端依赖（npm install）..."
+  echo "正在安装前端依赖(npm install)..."
   npm install
 fi
 
 # --- 退出时清理 ---
 # 在脚本退出时触发（例如 Ctrl+C）
-trap 'echo; echo "--- 正在关闭 ---"; echo "正在停止后端服务（PID：$BACK_PID）..."; kill $BACK_PID 2>/dev/null || true; echo "后端服务已停止。"' EXIT INT TERM
+trap 'echo; echo "--- 正在关闭 ---"; echo "正在停止后端服务(PID:$BACK_PID)..."; kill $BACK_PID 2>/dev/null || true; echo "后端服务已停止。"' EXIT INT TERM
 
 # --- 启动前端开发服务器 ---
 echo "--- 启动前端开发服务器 ---"
-echo "现在可访问前端：http://localhost:$FRONTEND_PORT"
+echo "现在可访问前端: http://localhost:$FRONTEND_PORT"
 export VITE_API_URL="http://localhost:$BACKEND_PORT/api"
 echo "按 Ctrl+C 结束两个服务。"
 echo "------------------------------------"

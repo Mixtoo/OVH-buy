@@ -145,7 +145,7 @@ const LogsPage = () => {
       </div>
 
       {/* Filters and controls */}
-      <div className="cyber-panel p-3 sm:p-4 mb-4 sm:mb-6">
+      <div className="cyber-panel p-3 sm:p-4 mb-4 sm:mb-6 backdrop-blur-0 overflow-visible">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
           <div className="relative sm:col-span-2 lg:col-span-1">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">

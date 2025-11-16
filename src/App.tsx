@@ -13,6 +13,7 @@ import QueuePage from "./pages/QueuePage";
 import HistoryPage from "./pages/HistoryPage";
 import LogsPage from "./pages/LogsPage";
 import SettingsPage from "./pages/SettingsPage";
+import APIAccountsPage from "./pages/APIAccountsPage";
 import OVHAvailabilityPage from "./pages/OVHAvailabilityPage";
 import MonitorPage from "./pages/MonitorPage";
 import VPSMonitorPage from "./pages/VPSMonitorPage";
@@ -51,6 +52,7 @@ const App = () => (
                   <Route path="history" element={<HistoryPage />} />
                   <Route path="logs" element={<LogsPage />} />
                   <Route path="settings" element={<SettingsPage />} />
+                  <Route path="api-accounts" element={<APIAccountsPage />} />
                   <Route path="*" element={<NotFound />} />
                 </Route>
               </Routes>

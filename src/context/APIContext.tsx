@@ -27,6 +27,10 @@ interface APIContextType {
   isAuthenticated: boolean;
   setAPIKeys: (keys: APIKeysType) => Promise<void>;
   checkAuthentication: () => Promise<boolean>;
+  accounts: any[];
+  currentAccountId: string;
+  setCurrentAccount: (id: string) => Promise<void>;
+  refreshAccounts: () => Promise<void>;
 }
 
 interface APIKeysType {
@@ -55,6 +59,8 @@ export const API_Provider = ({ children }: { children: ReactNode }) => {
   const [zone, setZone] = useState<string>('IE');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [currentAccountId, setCurrentAccountIdState] = useState<string>('');
 
   // Load API keys from backend on mount
   useEffect(() => {
@@ -95,6 +101,29 @@ export const API_Provider = ({ children }: { children: ReactNode }) => {
     };
 
     loadAPIKeys();
+  }, []);
+
+  const refreshAccounts = async (): Promise<void> => {
+    try {
+      const res = await api.get('/accounts');
+      const list = res.data?.accounts || [];
+      setAccounts(list);
+      const local = localStorage.getItem('current_account_id');
+      const useId = local || (list.length > 0 ? list[0].id : '');
+      if (useId) {
+        setCurrentAccountIdState(useId);
+        localStorage.setItem('current_account_id', useId);
+        try { await checkAuthentication(); } catch {}
+      }
+    } catch (e: any) {
+      setAccounts([]);
+      const msg = e?.response?.data?.error || '无法获取账户列表，请先在“系统设置”配置访问密钥';
+      try { (window as any).console?.warn(msg); } catch {}
+    }
+  };
+
+  useEffect(() => {
+    refreshAccounts();
   }, []);
 
   // Save API keys to backend
@@ -155,6 +184,28 @@ export const API_Provider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  const setCurrentAccount = async (id: string): Promise<void> => {
+    setCurrentAccountIdState(id);
+    localStorage.setItem('current_account_id', id);
+    try {
+      const ok = await checkAuthentication();
+      if (ok) {
+        toast.success('账户已切换');
+      } else {
+        toast.warning('账户切换后认证失败');
+      }
+    } catch {
+      toast.error('账户切换失败');
+    }
+  };
+
+  useEffect(() => {
+    if (!currentAccountId) return;
+    (async () => {
+      try { await checkAuthentication(); } catch {}
+    })();
+  }, [currentAccountId]);
+
   const value = {
     appKey,
     appSecret,
@@ -167,7 +218,11 @@ export const API_Provider = ({ children }: { children: ReactNode }) => {
     isLoading,
     isAuthenticated,
     setAPIKeys,
-    checkAuthentication
+    checkAuthentication,
+    accounts,
+    currentAccountId,
+    setCurrentAccount,
+    refreshAccounts
   };
 
   return <APIContext.Provider value={value}>{children}</APIContext.Provider>;

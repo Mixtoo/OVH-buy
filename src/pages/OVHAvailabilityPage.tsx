@@ -366,7 +366,7 @@ const OVHAvailabilityPage = () => {
 
       {/* API 信息 */}
       {endpoint && (
-        <div className="cyber-panel p-4 border-cyan-500/50">
+        <div className="cyber-panel p-4 border-cyan-500/50 backdrop-blur-0 overflow-visible">
           <div className="flex items-start gap-3">
             <Database className="w-5 h-5 text-cyan-400 mt-0.5" />
             <div className="flex-1">
@@ -406,7 +406,7 @@ const OVHAvailabilityPage = () => {
       {/* 统计卡片 */}
       {availabilities.length > 0 && (
         <div className="grid grid-cols-3 gap-2 sm:gap-4">
-          <div className="cyber-panel p-2 sm:p-4">
+          <div className="cyber-panel p-2 sm:p-4 backdrop-blur-0 overflow-visible">
             <div className="flex items-center gap-1 sm:gap-2 text-cyber-muted text-xs sm:text-sm mb-1">
               <Database className="w-3 h-3 sm:w-4 sm:h-4" />
               <span className="hidden sm:inline">总记录数</span>
@@ -414,7 +414,7 @@ const OVHAvailabilityPage = () => {
             </div>
             <div className="text-lg sm:text-2xl font-bold text-cyber-accent">{stats.total}</div>
           </div>
-          <div className="cyber-panel p-2 sm:p-4">
+          <div className="cyber-panel p-2 sm:p-4 backdrop-blur-0 overflow-visible">
             <div className="flex items-center gap-1 sm:gap-2 text-cyber-muted text-xs sm:text-sm mb-1">
               <TrendingUp className="w-3 h-3 sm:w-4 sm:h-4" />
               <span className="hidden sm:inline">有货服务器</span>
@@ -422,7 +422,7 @@ const OVHAvailabilityPage = () => {
             </div>
             <div className="text-lg sm:text-2xl font-bold text-green-400">{stats.available}</div>
           </div>
-          <div className="cyber-panel p-2 sm:p-4">
+          <div className="cyber-panel p-2 sm:p-4 backdrop-blur-0 overflow-visible">
             <div className="flex items-center gap-1 sm:gap-2 text-cyber-muted text-xs sm:text-sm mb-1">
               <Filter className="w-3 h-3 sm:w-4 sm:h-4" />
               <span className="hidden sm:inline">1小时内</span>
@@ -435,7 +435,7 @@ const OVHAvailabilityPage = () => {
 
       {/* 搜索和过滤器 */}
       {availabilities.length > 0 && (
-        <div className="cyber-panel p-3 sm:p-4">
+        <div className="cyber-panel p-3 sm:p-4 backdrop-blur-0 overflow-visible">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4">
             {/* 搜索框 */}
             <div className="relative sm:col-span-2 lg:col-span-1">
@@ -559,7 +559,7 @@ const OVHAvailabilityPage = () => {
       {/* 数据列表 */}
       {filteredData.length === 0 && availabilities.length > 0 ? (
         // 有数据但过滤后为空，显示"没有匹配的结果"
-        <div className="cyber-panel p-8 text-center">
+        <div className="cyber-panel p-8 text-center backdrop-blur-0 overflow-visible">
           <Filter className="w-16 h-16 text-cyber-muted mx-auto mb-4 opacity-50" />
           <p className="text-cyber-muted mb-2">没有匹配的结果</p>
           <p className="text-sm text-slate-500">尝试修改搜索或过滤条件</p>
@@ -571,7 +571,7 @@ const OVHAvailabilityPage = () => {
             {paginatedData.map((item, index) => (
               <div
                 key={item.fqn || index}
-                className="cyber-panel p-3 sm:p-4 hover:border-cyber-accent/50 transition-colors"
+                className="cyber-panel p-3 sm:p-4 hover:border-cyber-accent/50 transition-colors backdrop-blur-0 overflow-visible"
               >
               <div className="mb-2 sm:mb-3">
                 <div className="flex items-start justify-between mb-2 gap-2">
@@ -632,7 +632,7 @@ const OVHAvailabilityPage = () => {
           
           {/* 分页控件 */}
           {totalPages > 1 && (
-            <div className="cyber-panel p-3 sm:p-4 mt-3 sm:mt-4">
+            <div className="cyber-panel p-3 sm:p-4 mt-3 sm:mt-4 backdrop-blur-0 overflow-visible">
               <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4">
                 <div className="text-xs sm:text-sm text-cyber-muted">
                   {isMobile ? (

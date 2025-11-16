@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { api } from "@/utils/apiClient";
 import { toast } from "sonner";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useAPI } from "@/context/APIContext";
 import { useToast } from "@/components/ToastContainer";
 
 interface PurchaseHistory {
@@ -21,17 +22,25 @@ interface PurchaseHistory {
     tax?: number;
     currencyCode?: string;
   };
+  accountId?: string;
 }
 
 const HistoryPage = () => {
   const isMobile = useIsMobile();
   const { showConfirm } = useToast();
+  const { accounts } = useAPI();
   const [history, setHistory] = useState<PurchaseHistory[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false); // 区分初始加载和刷新
   const [filterStatus, setFilterStatus] = useState<"all" | "success" | "failed">("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [filteredHistory, setFilteredHistory] = useState<PurchaseHistory[]>([]);
+
+  const getAccountLabel = (id?: string) => {
+    if (!id) return '默认账户';
+    const acc = accounts.find((a: any) => a?.id === id);
+    return acc?.alias || id;
+  };
 
   // Fetch purchase history
   const fetchHistory = async (isRefresh = false) => {
@@ -214,6 +223,11 @@ const HistoryPage = () => {
                     <div className="text-xs text-cyber-text-dimmed mt-1">
                       {item.datacenter.toUpperCase()} · {new Date(item.purchaseTime).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </div>
+                    {item.accountId && (
+                      <div className="text-[10px] text-slate-300 mt-1">
+                        账户：{getAccountLabel(item.accountId)}
+                      </div>
+                    )}
                   </div>
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                     item.status === "success" 
@@ -278,6 +292,7 @@ const HistoryPage = () => {
                   <th className="px-3 py-2.5 text-left">配置选项</th>
                   <th className="px-3 py-2.5 text-left">价格</th>
                   <th className="px-3 py-2.5 text-left">状态</th>
+                  <th className="px-3 py-2.5 text-left">账户</th>
                   <th className="px-3 py-2.5 text-left">购买时间</th>
                   <th className="px-3 py-2.5 text-left">操作</th>
                 </tr>
@@ -327,6 +342,9 @@ const HistoryPage = () => {
                       }`}>
                         {item.status === "success" ? "成功" : "失败"}
                       </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-cyber-text-dimmed whitespace-nowrap">
+                      {item.accountId ? getAccountLabel(item.accountId) : '-'}
                     </td>
                     <td className="px-3 py-2.5 text-cyber-text-dimmed text-xs">
                       <div className="max-w-[140px] truncate" title={new Date(item.purchaseTime).toLocaleString()}>

@@ -28,6 +28,7 @@ from server_monitor import ServerMonitor
 DATA_DIR = "data"
 CACHE_DIR = "cache"
 LOGS_DIR = "logs"
+ACCOUNTS_FILE = os.path.join(DATA_DIR, "accounts.json")
 
 # Ensure directories exist
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -57,7 +58,10 @@ app = Flask(__name__)
 CORS(app, resources={
     r"/*": {
         "origins": "*",
-        "allow_headers": ["Content-Type", "Authorization", "X-API-Key", "X-Request-Time"]
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        "allow_headers": ["Content-Type", "Authorization", "X-API-Key", "X-Request-Time", "X-OVH-Account"],
+        "expose_headers": ["X-Cache-Warning"],
+        "max_age": 3600
     }
 })
 
@@ -85,6 +89,9 @@ config = {
     "zone": "IE",
 }
 
+accounts = {}
+default_account_id = None
+
 logs = []
 queue = []
 purchase_history = []
@@ -103,14 +110,16 @@ stats = {
 server_list_cache = {
     "data": [],
     "timestamp": None,
-    "cache_duration": 2 * 60 * 60  # 缓存2小时
+    "cache_duration": 2 * 60 * 60
 }
+
 
 # 自动刷新缓存的后台线程标志
 auto_refresh_running = False
 
 # 初始化监控器（需要在函数定义后才能传入函数引用）
 monitor = None
+monitors = {}
 
 # 全局删除任务ID集合（用于立即停止后台线程处理）
 deleted_task_ids = set()
@@ -127,7 +136,7 @@ vps_check_interval = 60  # VPS检查间隔（秒）
 
 # Load data from files if they exist
 def load_data():
-    global config, logs, queue, purchase_history, server_plans, stats, config_sniper_tasks, vps_subscriptions, vps_check_interval
+    global config, logs, queue, purchase_history, server_plans, stats, config_sniper_tasks, vps_subscriptions, vps_check_interval, accounts, default_account_id
     
     if os.path.exists(CONFIG_FILE):
         try:
@@ -135,6 +144,36 @@ def load_data():
                 config = json.load(f)
         except json.JSONDecodeError:
             print(f"警告: {CONFIG_FILE}文件格式不正确，使用默认值")
+    if os.path.exists(ACCOUNTS_FILE):
+        try:
+            with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
+                accounts_data = json.load(f)
+                accs = accounts_data.get("accounts")
+                if isinstance(accs, list):
+                    accounts = {a.get("id"): a for a in accs if a and a.get("id")}
+                elif isinstance(accs, dict):
+                    accounts = accs
+        except Exception as e:
+            print(f"警告: {ACCOUNTS_FILE}文件读取失败: {e}")
+
+    if (not accounts) and (config.get("appKey") and config.get("appSecret") and config.get("consumerKey")):
+        aid = "default"
+        accounts[aid] = {
+            "id": aid,
+            "alias": "默认账户",
+            "appKey": config.get("appKey"),
+            "appSecret": config.get("appSecret"),
+            "consumerKey": config.get("consumerKey"),
+            "endpoint": config.get("endpoint", "ovh-eu"),
+            "zone": config.get("zone", "IE")
+        }
+        try:
+            payload = {"accounts": list(accounts.values())}
+            with open(ACCOUNTS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            print("已从config迁移创建默认账户")
+        except Exception as e:
+            print(f"迁移保存账户失败: {e}")
     
     if os.path.exists(LOGS_FILE):
         try:
@@ -195,39 +234,148 @@ def load_data():
         except json.JSONDecodeError:
             print(f"警告: {SERVERS_FILE}文件格式不正确，使用空列表")
     
-    # 加载订阅数据
+    # 加载订阅数据（默认账户）
     if os.path.exists(SUBSCRIPTIONS_FILE):
         try:
             with open(SUBSCRIPTIONS_FILE, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
                 if content:
                     subscriptions_data = json.loads(content)
-                    # 恢复订阅到监控器
+                    mon = init_monitor()
                     if 'subscriptions' in subscriptions_data:
                         for sub in subscriptions_data['subscriptions']:
-                            monitor.add_subscription(
+                            mon.add_subscription(
                                 sub['planCode'],
                                 sub.get('datacenters', []),
                                 sub.get('notifyAvailable', True),
                                 sub.get('notifyUnavailable', False),
-                                sub.get('serverName'),  # 恢复服务器名称
-                                sub.get('lastStatus', {}),  # ✅ 恢复上次状态，避免重复通知
-                                sub.get('history', []),  # ✅ 恢复历史记录
-                                sub.get('autoOrder', False),  # 恢复自动下单标记
-                                sub.get('autoOrderQuantity', 0)  # 恢复自动下单数量
+                                sub.get('serverName'),
+                                sub.get('lastStatus', {}),
+                                sub.get('history', []),
+                                sub.get('autoOrder', False),
+                                sub.get('autoOrderQuantity', 0)
                             )
-                    # 恢复已知服务器列表
                     if 'known_servers' in subscriptions_data:
-                        monitor.known_servers = set(subscriptions_data['known_servers'])
-                    # 检查间隔全局强制为5秒（忽略配置文件中的值）
-                    monitor.check_interval = 5
+                        mon.known_servers = set(subscriptions_data['known_servers'])
+                    mon.check_interval = 5
                     print(f"检查间隔已强制设置为: 5秒（全局固定值）")
-                    print(f"已加载 {len(monitor.subscriptions)} 个订阅")
+                    print(f"已加载 {len(mon.subscriptions)} 个订阅")
                 else:
                     print(f"警告: {SUBSCRIPTIONS_FILE}文件为空")
         except json.JSONDecodeError:
             print(f"警告: {SUBSCRIPTIONS_FILE}文件格式不正确")
-    
+
+    # 加载各账户订阅分片
+    try:
+        for aid in accounts.keys():
+            path = os.path.join(DATA_DIR, f"subscriptions_{aid}.json")
+            if not os.path.exists(path):
+                continue
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    continue
+                subscriptions_data = json.loads(content)
+                mon = get_monitor_for_account(aid)
+                if 'subscriptions' in subscriptions_data:
+                    for sub in subscriptions_data['subscriptions']:
+                        mon.add_subscription(
+                            sub['planCode'],
+                            sub.get('datacenters', []),
+                            sub.get('notifyAvailable', True),
+                            sub.get('notifyUnavailable', False),
+                            sub.get('serverName'),
+                            sub.get('lastStatus', {}),
+                            sub.get('history', []),
+                            sub.get('autoOrder', False),
+                            sub.get('autoOrderQuantity', 0)
+                        )
+                if 'known_servers' in subscriptions_data:
+                    mon.known_servers = set(subscriptions_data['known_servers'])
+                mon.check_interval = 5
+                print(f"账户 {aid} 已加载 {len(mon.subscriptions)} 个订阅")
+    except Exception as e:
+        print(f"警告: 加载账户订阅分片失败: {e}")
+
+    # 加载各账户队列分片
+    try:
+        for aid in accounts.keys():
+            path = os.path.join(DATA_DIR, f"queue_{aid}.json")
+            if not os.path.exists(path):
+                continue
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    continue
+                acc_queue = json.loads(content)
+                if isinstance(acc_queue, list):
+                    queue.extend(acc_queue)
+        print(f"已加载分账号队列分片，共 {len(queue)} 项")
+    except Exception as e:
+        print(f"警告: 加载账户队列分片失败: {e}")
+
+    # 队列去重（按 id）
+    try:
+        seen_ids = set()
+        dedup_queue = []
+        for item in queue:
+            item_id = item.get("id")
+            if item_id and item_id not in seen_ids:
+                seen_ids.add(item_id)
+                dedup_queue.append(item)
+        queue = dedup_queue
+        print(f"队列去重后共有 {len(queue)} 项")
+    except Exception as e:
+        print(f"队列去重失败: {e}")
+
+    # 规范化队列项的单次下单数量（补齐旧任务）
+    try:
+        normalized = 0
+        for item in queue:
+            q = item.get("quantity")
+            try:
+                q = int(q) if q is not None else 1
+            except Exception:
+                q = 1
+            q = max(1, min(q, 4))
+            if item.get("quantity") != q:
+                item["quantity"] = q
+                normalized += 1
+        if normalized:
+            print(f"已规范化 {normalized} 个队列项的单次下单数量到1-4范围")
+    except Exception as e:
+        print(f"规范化队列项quantity失败: {e}")
+
+    # 加载各账户抢购历史分片
+    try:
+        for aid in accounts.keys():
+            path = os.path.join(DATA_DIR, f"history_{aid}.json")
+            if not os.path.exists(path):
+                continue
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    continue
+                acc_history = json.loads(content)
+                if isinstance(acc_history, list):
+                    purchase_history.extend(acc_history)
+        print(f"已加载分账号抢购历史分片，共 {len(purchase_history)} 项")
+    except Exception as e:
+        print(f"警告: 加载账户抢购历史分片失败: {e}")
+
+    # 抢购历史去重（按 id）
+    try:
+        seen_hist_ids = set()
+        dedup_history = []
+        for h in purchase_history:
+            hid = h.get("id")
+            if hid and hid not in seen_hist_ids:
+                seen_hist_ids.add(hid)
+                dedup_history.append(h)
+        purchase_history = dedup_history
+        print(f"抢购历史去重后共有 {len(purchase_history)} 项")
+    except Exception as e:
+        print(f"抢购历史去重失败: {e}")
     # 加载配置绑定狙击任务
     if os.path.exists(CONFIG_SNIPER_FILE):
         try:
@@ -275,6 +423,33 @@ def save_data():
             json.dump(purchase_history, f, ensure_ascii=False, indent=2)
         with open(SERVERS_FILE, 'w', encoding='utf-8') as f:
             json.dump(server_plans, f, ensure_ascii=False, indent=2)
+        try:
+            acc_queue_map = {}
+            for item in queue:
+                aid = item.get("accountId")
+                acc_queue_map.setdefault(aid, []).append(item)
+            acc_ids = set(accounts.keys())
+            acc_ids.update(acc_queue_map.keys())
+            acc_ids.add(None)
+            for aid in acc_ids:
+                items = acc_queue_map.get(aid, [])
+                path = os.path.join(DATA_DIR, f"queue_{aid or 'default'}.json")
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(items, f, ensure_ascii=False, indent=2)
+            acc_hist_map = {}
+            for h in purchase_history:
+                aid = h.get("accountId")
+                acc_hist_map.setdefault(aid, []).append(h)
+            acc_ids_h = set(accounts.keys())
+            acc_ids_h.update(acc_hist_map.keys())
+            acc_ids_h.add(None)
+            for aid in acc_ids_h:
+                items = acc_hist_map.get(aid, [])
+                path = os.path.join(DATA_DIR, f"history_{aid or 'default'}.json")
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(items, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logging.error(f"分账号保存队列和历史失败: {str(e)}")
         logging.info("Data saved to files")
     except Exception as e:
         logging.error(f"保存数据时出错: {str(e)}")
@@ -316,6 +491,17 @@ def save_vps_subscriptions():
         logging.info(f"已保存 {len(vps_subscriptions)} 个VPS订阅")
     except Exception as e:
         logging.error(f"保存VPS订阅时出错: {str(e)}")
+
+def save_accounts():
+    try:
+        payload = {
+            "accounts": list(accounts.values())
+        }
+        with open(ACCOUNTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        add_log("INFO", "账户配置已保存", "accounts")
+    except Exception as e:
+        add_log("ERROR", f"保存账户配置失败: {str(e)}", "accounts")
 
 # 日志缓冲区：批量写入以提高性能
 log_write_counter = 0
@@ -378,7 +564,7 @@ def flush_logs():
 
 # Update statistics
 def update_stats():
-    global stats, monitor
+    global stats, monitor, monitors
     # 活跃队列 = 所有未完成的队列项（running + pending），不包括已完成或失败的
     active_count = sum(1 for item in queue if item["status"] in ["running", "pending", "paused"])
     available_count = 0
@@ -395,8 +581,13 @@ def update_stats():
     
     # 检查监控器运行状态
     monitor_running = False
-    if monitor:
-        monitor_running = monitor.running
+    if monitor and monitor.running:
+        monitor_running = True
+    else:
+        try:
+            monitor_running = any(m.running for m in monitors.values())
+        except Exception:
+            monitor_running = False
     
     stats = {
         "activeQueues": active_count,
@@ -423,27 +614,79 @@ def get_api_base_url():
     }
     return endpoint_urls.get(config.get('endpoint', 'ovh-eu'), 'https://eu.api.ovh.com')
 
+def get_api_base_url_for(endpoint):
+    endpoint_urls = {
+        'ovh-eu': 'https://eu.api.ovh.com',
+        'ovh-us': 'https://api.us.ovhcloud.com',
+        'ovh-ca': 'https://ca.api.ovh.com'
+    }
+    return endpoint_urls.get(endpoint or 'ovh-eu', 'https://eu.api.ovh.com')
+
+def get_account_id_from_request():
+    try:
+        aid = request.headers.get('X-OVH-Account')
+    except Exception:
+        aid = None
+    if not aid:
+        try:
+            if request.is_json:
+                body = request.get_json(silent=True) or {}
+                aid = body.get('accountId')
+        except Exception:
+            aid = None
+    return aid
+
+def get_current_account_config(account_id=None):
+    aid = account_id or get_account_id_from_request()
+    if aid and accounts.get(aid):
+        acc = accounts[aid]
+        return {
+            "appKey": acc.get("appKey", ""),
+            "appSecret": acc.get("appSecret", ""),
+            "consumerKey": acc.get("consumerKey", ""),
+            "endpoint": acc.get("endpoint", config.get("endpoint", "ovh-eu")),
+            "zone": acc.get("zone", config.get("zone", "IE")),
+            "tgToken": acc.get("tgToken", config.get("tgToken", "")),
+            "tgChatId": acc.get("tgChatId", config.get("tgChatId", "")),
+            "id": aid,
+            "alias": acc.get("alias")
+        }
+    return {
+        "appKey": config.get("appKey", ""),
+        "appSecret": config.get("appSecret", ""),
+        "consumerKey": config.get("consumerKey", ""),
+        "endpoint": config.get("endpoint", "ovh-eu"),
+        "zone": config.get("zone", "IE"),
+        "tgToken": config.get("tgToken", ""),
+        "tgChatId": config.get("tgChatId", ""),
+        "id": None,
+        "alias": None
+    }
+
 # Initialize OVH client
-def get_ovh_client():
-    global config
-    if not config["appKey"] or not config["appSecret"] or not config["consumerKey"]:
+def get_ovh_client(account_id=None):
+    cfg = get_current_account_config(account_id)
+    if not cfg["appKey"] or not cfg["appSecret"] or not cfg["consumerKey"]:
         add_log("ERROR", "Missing OVH API credentials")
         return None
-    
     try:
         client = ovh.Client(
-            endpoint=config["endpoint"],
-            application_key=config["appKey"],
-            application_secret=config["appSecret"],
-            consumer_key=config["consumerKey"]
+            endpoint=cfg["endpoint"],
+            application_key=cfg["appKey"],
+            application_secret=cfg["appSecret"],
+            consumer_key=cfg["consumerKey"]
         )
         return client
     except Exception as e:
         add_log("ERROR", f"Failed to initialize OVH client: {str(e)}")
         return None
 
+
+def get_client_from_request():
+    return get_ovh_client(get_account_id_from_request())
+
 # 监控器专用：获取所有配置组合的可用性
-def check_server_availability_with_configs(plan_code):
+def check_server_availability_with_configs(plan_code, account_id=None):
     """
     获取服务器所有配置组合的可用性（用于监控器）
     
@@ -457,7 +700,7 @@ def check_server_availability_with_configs(plan_code):
         ...
     }
     """
-    client = get_ovh_client()
+    client = get_ovh_client(account_id)
     if not client:
         return {}
     
@@ -475,8 +718,8 @@ def check_server_availability_with_configs(plan_code):
         catalog = None
         catalog_plan = None
         try:
-            # 使用默认的IE区域获取catalog（所有配置共享同一个catalog）
-            catalog = client.get('/order/catalog/public/eco?ovhSubsidiary=IE')
+            zone_cfg = get_current_account_config(account_id)
+            catalog = client.get(f"/order/catalog/public/eco?ovhSubsidiary={zone_cfg['zone']}")
             for plan in catalog.get("plans", []):
                 if plan.get("planCode") == plan_code:
                     catalog_plan = plan
@@ -553,7 +796,7 @@ def check_server_availability_with_configs(plan_code):
 
 # Check availability of servers
 def check_server_availability(plan_code, options=None):
-    client = get_ovh_client()
+    client = get_client_from_request()
     if not client:
         return None
     
@@ -711,41 +954,60 @@ def check_server_availability(plan_code, options=None):
         return None
 # Purchase server
 def purchase_server(queue_item):
-    client = get_ovh_client()
+    client = get_ovh_client(queue_item.get("accountId"))
     if not client:
         return False
     
     cart_id = None # Initialize cart_id to None
     item_id = None # Initialize item_id to None
+
+    # 读取每个任务内的下单数量与是否自动付款
+    quantity = queue_item.get("quantity", 1)
+    auto_pay = queue_item.get("auto_pay", False)
     
     try:
-        # Check availability first
-        add_log("INFO", f"开始为 {queue_item['planCode']} 在 {queue_item['datacenter']} 的购买流程，选项: {queue_item.get('options')}", "purchase")
+        # Check availability with multi-DC and priority weights
+        # 构建目标机房列表
+        target_dcs = []
+        if isinstance(queue_item.get("datacenters"), list) and queue_item.get("datacenters"):
+            target_dcs = queue_item.get("datacenters")
+        elif queue_item.get("datacenter"):
+            target_dcs = [queue_item.get("datacenter")]  # 兼容旧任务
+
+        # 直接使用列表顺序作为优先级（靠前优先）
+        sorted_target_dcs = target_dcs[:]
+
+        add_log("INFO", f"开始为 {queue_item['planCode']} 在 {','.join(sorted_target_dcs)} 的购买流程（按顺序优先）", "purchase")
+
         availabilities = client.get('/dedicated/server/datacenter/availabilities', planCode=queue_item["planCode"])
-        
         found_available = False
-        for item in availabilities:
-            datacenters = item.get("datacenters", [])
-            
-            for dc_info in datacenters:
-                # 转换数据中心代码以便比较（API返回的是OVH API代码，如ynm）
-                api_dc_from_queue = _convert_display_dc_to_api_dc(queue_item["datacenter"])
-                if dc_info.get("datacenter") == api_dc_from_queue and dc_info.get("availability") not in ["unavailable", "unknown"]:
-                    found_available = True
+        selected_api_dc = None
+        selected_display_dc = None
+        # 按优先级逐个机房查询是否有货
+        for display_dc in sorted_target_dcs:
+            api_dc = _convert_display_dc_to_api_dc(display_dc)
+            for item in availabilities:
+                for dc_info in item.get("datacenters", []):
+                    if dc_info.get("datacenter") == api_dc and dc_info.get("availability") not in ["unavailable", "unknown"]:
+                        found_available = True
+                        selected_api_dc = api_dc
+                        selected_display_dc = display_dc
+                        break
+                if found_available:
                     break
-            
             if found_available:
                 break
-        
+
         if not found_available:
-            add_log("INFO", f"服务器 {queue_item['planCode']} 在数据中心 {queue_item['datacenter']} 当前无货", "purchase")
+            add_log("INFO", f"服务器 {queue_item['planCode']} 在数据中心 {','.join(sorted_target_dcs)} 当前无货", "purchase")
             # Even if not available, we might want to record this attempt in history if it's the first one
             # For now, returning False will prevent history update here, purchase_server is called in a loop by queue processor
             return False
         
         # Create cart
-        add_log("INFO", f"为区域 {config['zone']} 创建购物车", "purchase")
-        cart_result = client.post('/order/cart', ovhSubsidiary=config["zone"])
+        zone_cfg = get_current_account_config(queue_item.get("accountId"))
+        add_log("INFO", f"为区域 {zone_cfg['zone']} 创建购物车", "purchase")
+        cart_result = client.post('/order/cart', ovhSubsidiary=zone_cfg["zone"])
         cart_id = cart_result["cartId"]
         add_log("INFO", f"购物车创建成功，ID: {cart_id}", "purchase")
         
@@ -755,7 +1017,7 @@ def purchase_server(queue_item):
             "planCode": queue_item["planCode"],
             "pricingMode": "default",
             "duration": "P1M",  # 1 month
-            "quantity": 1
+            "quantity": quantity
         }
         item_result = client.post(f'/order/cart/{cart_id}/eco', **item_payload)
         item_id = item_result["itemId"] # This is the itemId for the base server
@@ -764,7 +1026,8 @@ def purchase_server(queue_item):
         # Configure item (datacenter, OS, region)
         add_log("INFO", f"为项目 {item_id} 设置必需配置", "purchase")
         # 转换数据中心代码（前端显示代码 → OVH API代码）
-        api_datacenter = _convert_display_dc_to_api_dc(queue_item["datacenter"])
+        first_dc = (queue_item.get("datacenters") or [None])[0]
+        api_datacenter = selected_api_dc or _convert_display_dc_to_api_dc(first_dc)
         dc_lower = api_datacenter.lower()
         region = None
         EU_DATACENTERS = ['gra', 'rbx', 'sbg', 'eri', 'lim', 'waw', 'par', 'fra', 'lon']
@@ -909,9 +1172,9 @@ def purchase_server(queue_item):
         except Exception as price_error:
             add_log("WARNING", f"获取价格信息时出错: {str(price_error)}，将继续结账流程", "purchase")
         
-        add_log("INFO", f"对购物车 {cart_id} 执行结账", "purchase")
+        add_log("INFO", f"对购物车 {cart_id} 执行结账，自动付款: {auto_pay}", "purchase")
         checkout_payload = {
-            "autoPayWithPreferredPaymentMethod": False, 
+            "autoPayWithPreferredPaymentMethod": auto_pay, 
             "waiveRetractationPeriod": True
         }
         checkout_result = client.post(f'/order/cart/{cart_id}/checkout', **checkout_payload)
@@ -931,6 +1194,7 @@ def purchase_server(queue_item):
             existing_history_entry["purchaseTime"] = current_time_iso
             existing_history_entry["attemptCount"] = queue_item["retryCount"]
             existing_history_entry["options"] = queue_item.get("options", [])
+            existing_history_entry["accountId"] = queue_item.get("accountId")
             if price_info:
                 existing_history_entry["price"] = price_info
             add_log("INFO", f"更新抢购历史(成功) 任务ID: {queue_item['id']}", "purchase")
@@ -939,14 +1203,15 @@ def purchase_server(queue_item):
                 "id": str(uuid.uuid4()),
                 "taskId": queue_item["id"],
                 "planCode": queue_item["planCode"],
-                "datacenter": queue_item["datacenter"],
+                "datacenter": selected_display_dc or (queue_item.get("datacenters") or [None])[0],
                 "options": queue_item.get("options", []),
                 "status": "success",
                 "orderId": order_id_val,
                 "orderUrl": order_url_val,
                 "errorMessage": None,
                 "purchaseTime": current_time_iso,
-                "attemptCount": queue_item["retryCount"]
+                "attemptCount": queue_item["retryCount"],
+                "accountId": queue_item.get("accountId")
             }
             if price_info:
                 history_entry["price"] = price_info
@@ -956,14 +1221,14 @@ def purchase_server(queue_item):
         save_data()
         update_stats()
         
-        add_log("INFO", f"成功购买 {queue_item['planCode']} 在 {queue_item['datacenter']} (订单ID: {order_id_val}, URL: {order_url_val})", "purchase")
+        add_log("INFO", f"成功购买 {queue_item['planCode']} 在 {selected_display_dc or first_dc} (订单ID: {order_id_val}, URL: {order_url_val})", "purchase")
 
         # 发送 Telegram 成功通知
         if config.get("tgToken") and config.get("tgChatId"):
             success_message = (
                 f"🎉 OVH 服务器抢购成功！🎉\n\n"
                 f"服务器型号 (Plan Code): {queue_item['planCode']}\n"
-                f"数据中心: {queue_item['datacenter']}\n"
+                f"数据中心: {selected_display_dc or first_dc}\n"
                 f"订单 ID: {order_id_val}\n"
                 f"订单链接: {order_url_val}\n"
             )
@@ -999,20 +1264,22 @@ def purchase_server(queue_item):
             existing_history_entry["purchaseTime"] = current_time_iso
             existing_history_entry["attemptCount"] = queue_item["retryCount"]
             existing_history_entry["options"] = queue_item.get("options", [])
+            existing_history_entry["accountId"] = queue_item.get("accountId")
             add_log("INFO", f"更新抢购历史(API失败) 任务ID: {queue_item['id']}", "purchase")
         else:
             history_entry = {
                 "id": str(uuid.uuid4()),
                 "taskId": queue_item["id"],
                 "planCode": queue_item["planCode"],
-                "datacenter": queue_item["datacenter"],
+                "datacenter": (queue_item.get("datacenters") or [None])[0],
                 "options": queue_item.get("options", []),
                 "status": "failed",
                 "orderId": None,
                 "orderUrl": None,
                 "errorMessage": error_msg,
                 "purchaseTime": current_time_iso,
-                "attemptCount": queue_item["retryCount"]
+                "attemptCount": queue_item["retryCount"],
+                "accountId": queue_item.get("accountId")
             }
             purchase_history.append(history_entry)
             add_log("INFO", f"创建抢购历史(API失败) 任务ID: {queue_item['id']}", "purchase")
@@ -1040,20 +1307,22 @@ def purchase_server(queue_item):
             existing_history_entry["purchaseTime"] = current_time_iso
             existing_history_entry["attemptCount"] = queue_item["retryCount"]
             existing_history_entry["options"] = queue_item.get("options", [])
+            existing_history_entry["accountId"] = queue_item.get("accountId")
             add_log("INFO", f"更新抢购历史(通用失败) 任务ID: {queue_item['id']}", "purchase")
         else:
             history_entry = {
                 "id": str(uuid.uuid4()),
                 "taskId": queue_item["id"],
                 "planCode": queue_item["planCode"],
-                "datacenter": queue_item["datacenter"],
+                "datacenter": (queue_item.get("datacenters") or [None])[0],
                 "options": queue_item.get("options", []),
                 "status": "failed",
                 "orderId": None,
                 "orderUrl": None,
                 "errorMessage": error_msg,
                 "purchaseTime": current_time_iso,
-                "attemptCount": queue_item["retryCount"]
+                "attemptCount": queue_item["retryCount"],
+                "accountId": queue_item.get("accountId")
             }
             purchase_history.append(history_entry)
             add_log("INFO", f"创建抢购历史(通用失败) 任务ID: {queue_item['id']}", "purchase")
@@ -1110,10 +1379,11 @@ def process_queue():
                         deleted_task_ids.add(item["id"])
                         continue
                     
+                    target_dcs_text = item.get('datacenter') or ','.join(item.get('datacenters') or [])
                     if last_check_time == 0:
-                        add_log("INFO", f"首次尝试任务 {item['id']}: {item['planCode']} 在 {item['datacenter']}", "queue")
+                        add_log("INFO", f"首次尝试任务 {item['id']}: {item['planCode']} 在 {target_dcs_text}", "queue")
                     else:
-                        add_log("INFO", f"重试检查任务 {item['id']} (尝试次数: {item['retryCount'] + 1}): {item['planCode']} 在 {item['datacenter']}", "queue")
+                        add_log("INFO", f"重试检查任务 {item['id']} (尝试次数: {item['retryCount'] + 1}): {item['planCode']} 在 {target_dcs_text}", "queue")
                     
                     # 更新检查时间和重试计数
                     item["lastCheckTime"] = current_time
@@ -1125,10 +1395,10 @@ def process_queue():
                         item["status"] = "completed"
                         item["updatedAt"] = datetime.now().isoformat()
                         log_message_verb = "首次尝试购买成功" if item["retryCount"] == 1 else f"重试购买成功 (尝试次数: {item['retryCount']})"
-                        add_log("INFO", f"{log_message_verb}: {item['planCode']} 在 {item['datacenter']} (ID: {item['id']})", "queue")
+                        add_log("INFO", f"{log_message_verb}: {item['planCode']} 在 {target_dcs_text} (ID: {item['id']})", "queue")
                     else:
                         log_message_verb = "首次尝试购买失败或服务器暂无货" if item["retryCount"] == 1 else f"重试购买失败或服务器仍无货 (尝试次数: {item['retryCount']})"
-                        add_log("INFO", f"{log_message_verb}: {item['planCode']} 在 {item['datacenter']} (ID: {item['id']})。将根据重试间隔再次尝试。", "queue")
+                        add_log("INFO", f"{log_message_verb}: {item['planCode']} 在 {target_dcs_text} (ID: {item['id']})。将根据重试间隔再次尝试。", "queue")
                     
                     save_data() # 保存队列状态
                     update_stats() # 更新统计信息
@@ -1196,7 +1466,7 @@ def start_auto_refresh_cache():
     add_log("INFO", "自动刷新缓存线程已启动", "auto_refresh")
 # Load server list from OVH API
 def load_server_list():
-    global config
+    
     client = get_ovh_client()
     if not client:
         return []
@@ -1204,8 +1474,8 @@ def load_server_list():
     try:
         # 保存完整的API原始响应
         try:
-            # 尝试获取并保存原始目录响应
-            catalog = client.get(f'/order/catalog/public/eco?ovhSubsidiary={config["zone"]}')
+            zone_cfg = get_current_account_config()
+            catalog = client.get(f"/order/catalog/public/eco?ovhSubsidiary={zone_cfg['zone']}")
             with open(os.path.join(CACHE_DIR, "ovh_catalog_raw.json"), "w", encoding='utf-8') as f:
                 json.dump(catalog, f, ensure_ascii=False, indent=2)
             add_log("INFO", "已保存完整的API原始响应")
@@ -1213,7 +1483,8 @@ def load_server_list():
             add_log("WARNING", f"保存API原始响应时出错: {str(e)}")
         
         # Get server models
-        catalog = client.get(f'/order/catalog/public/eco?ovhSubsidiary={config["zone"]}')
+        zone_cfg = get_current_account_config()
+        catalog = client.get(f"/order/catalog/public/eco?ovhSubsidiary={zone_cfg['zone']}")
         plans = []
         
         # 创建一个计数器，记录硬件信息提取成功的服务器数量
@@ -2132,7 +2403,6 @@ def load_server_list():
 # 保存完整的API原始响应用于调试分析
 def save_raw_api_response(client, zone):
     try:
-        # 使用cache目录存储API响应
         api_responses_dir = os.path.join(CACHE_DIR, "api_responses")
         os.makedirs(api_responses_dir, exist_ok=True)
         
@@ -2176,8 +2446,9 @@ def send_telegram_msg(message: str, reply_markup=None):
         reply_markup: 可选的内联键盘（InlineKeyboardMarkup格式）
     """
     # 使用 app.py 的全局 config 字典
-    tg_token = config.get("tgToken")
-    tg_chat_id = config.get("tgChatId")
+    acc_cfg = get_current_account_config()
+    tg_token = acc_cfg.get("tgToken") or config.get("tgToken")
+    tg_chat_id = acc_cfg.get("tgChatId") or config.get("tgChatId")
 
     if not tg_token:
         add_log("WARNING", "Telegram消息未发送: Bot Token未在config中设置")
@@ -2229,29 +2500,52 @@ def send_telegram_msg(message: str, reply_markup=None):
 
 # 初始化服务器监控器
 def init_monitor():
-    """初始化监控器"""
-    global monitor
+    global monitor, monitors
+    first_aid = None
+    try:
+        first_aid = next(iter(accounts.keys())) if accounts else None
+    except Exception:
+        first_aid = None
     monitor = ServerMonitor(
-        check_availability_func=check_server_availability_with_configs,  # 使用配置级别的监控
+        check_availability_func=check_server_availability_with_configs,
         send_notification_func=send_telegram_msg,
-        add_log_func=add_log
+        add_log_func=add_log,
+        account_id=first_aid
     )
+    if first_aid:
+        monitors[first_aid] = monitor
     return monitor
 
+def get_monitor_for_account(account_id=None):
+    aid = account_id
+    if not aid:
+        try:
+            aid = next(iter(accounts.keys())) if accounts else None
+        except Exception:
+            aid = None
+    if aid not in monitors:
+        monitors[aid] = ServerMonitor(
+            check_availability_func=check_server_availability_with_configs,
+            send_notification_func=send_telegram_msg,
+            add_log_func=add_log,
+            account_id=aid
+        )
+    return monitors[aid]
+
 # 保存订阅数据
-def save_subscriptions():
-    """保存订阅数据到文件"""
+def save_subscriptions(account_id=None):
     try:
-        # 检查间隔全局强制为5秒，保存时也固定为5秒
-        monitor.check_interval = 5
+        mon = get_monitor_for_account(account_id)
+        mon.check_interval = 5
         subscriptions_data = {
-            "subscriptions": monitor.subscriptions,
-            "known_servers": list(monitor.known_servers),
-            "check_interval": 5  # 全局固定为5秒
+            "subscriptions": mon.subscriptions,
+            "known_servers": list(mon.known_servers),
+            "check_interval": 5
         }
-        with open(SUBSCRIPTIONS_FILE, 'w', encoding='utf-8') as f:
+        path = SUBSCRIPTIONS_FILE if not account_id else os.path.join(DATA_DIR, f"subscriptions_{account_id}.json")
+        with open(path, 'w', encoding='utf-8') as f:
             json.dump(subscriptions_data, f, ensure_ascii=False, indent=2)
-        add_log("INFO", "订阅数据已保存（检查间隔固定为5秒）", "monitor")
+        add_log("INFO", "订阅数据已保存", "monitor")
     except Exception as e:
         add_log("ERROR", f"保存订阅数据失败: {str(e)}", "monitor")
 
@@ -2311,12 +2605,31 @@ def save_settings():
 
 @app.route('/api/verify-auth', methods=['POST'])
 def verify_auth():
-    client = get_ovh_client()
+    body = request.get_json(silent=True) or {}
+    tmp_app_key = body.get('appKey')
+    tmp_app_secret = body.get('appSecret')
+    tmp_consumer_key = body.get('consumerKey')
+    tmp_endpoint = body.get('endpoint') or (get_current_account_config(get_account_id_from_request()).get('endpoint'))
+
+    client = None
+    try:
+        if tmp_app_key and tmp_app_secret and tmp_consumer_key:
+            client = ovh.Client(
+                endpoint=tmp_endpoint or 'ovh-eu',
+                application_key=tmp_app_key,
+                application_secret=tmp_app_secret,
+                consumer_key=tmp_consumer_key
+            )
+        else:
+            client = get_ovh_client(get_account_id_from_request())
+    except Exception as e:
+        add_log("ERROR", f"初始化OVH客户端失败: {str(e)}")
+        client = None
+
     if not client:
         return jsonify({"valid": False})
-    
+
     try:
-        # Try a simple API call to check authentication
         client.get("/me")
         return jsonify({"valid": True})
     except Exception as e:
@@ -2356,30 +2669,71 @@ def clear_logs():
 
 @app.route('/api/queue', methods=['GET'])
 def get_queue():
-    return jsonify(queue)
+    account_id = get_account_id_from_request()
+    if account_id:
+        items = [item for item in queue if item.get("accountId") == account_id]
+        seen = set()
+        dedup = []
+        for it in items:
+            iid = it.get("id")
+            if iid and iid not in seen:
+                seen.add(iid)
+                dedup.append(it)
+        return jsonify(dedup)
+    seen = set()
+    dedup = []
+    for it in queue:
+        iid = it.get("id")
+        if iid and iid not in seen:
+            seen.add(iid)
+            dedup.append(it)
+    return jsonify(dedup)
+
+@app.route('/api/queue/all', methods=['GET'])
+def get_queue_all():
+    seen = set()
+    dedup = []
+    for it in queue:
+        iid = it.get("id")
+        if iid and iid not in seen:
+            seen.add(iid)
+            dedup.append(it)
+    return jsonify(dedup)
 
 @app.route('/api/queue', methods=['POST'])
 def add_queue_item():
     data = request.json
+    account_id = get_account_id_from_request()
     
+    dcs = data.get("datacenters") or []
+    # 规范化每次下单数量（1-4）
+    try:
+        qty = int(data.get("quantity", 1))
+    except Exception:
+        qty = 1
+    qty = max(1, min(qty, 4))
+
     queue_item = {
         "id": str(uuid.uuid4()),
         "planCode": data.get("planCode", ""),
-        "datacenter": data.get("datacenter", ""),
+        "datacenters": dcs,
         "options": data.get("options", []),
+        "quantity": qty,
+        "auto_pay": data.get("auto_pay", False),
         "status": "running",  # 直接设置为 running
         "createdAt": datetime.now().isoformat(),
         "updatedAt": datetime.now().isoformat(),
         "retryInterval": data.get("retryInterval", 30),
         "retryCount": 0, # 初始化为0, process_queue的首次检查会处理
-        "lastCheckTime": 0 # 初始化为0, process_queue的首次检查会处理
+        "lastCheckTime": 0, # 初始化为0, process_queue的首次检查会处理
+        "accountId": account_id
     }
     
     queue.append(queue_item)
     save_data()
     update_stats()
     
-    add_log("INFO", f"添加任务 {queue_item['id']} ({queue_item['planCode']} 在 {queue_item['datacenter']}) 到队列并立即启动 (状态: running)")
+    add_log("INFO", f"添加任务 {queue_item['id']} ({queue_item['planCode']} 在 {','.join(queue_item.get('datacenters') or [])}) 到队列并立即启动 (状态: running)")
     return jsonify({"status": "success", "id": queue_item["id"]})
 
 @app.route('/api/queue/<id>', methods=['DELETE'])
@@ -2402,31 +2756,40 @@ def remove_queue_item(id):
 @app.route('/api/queue/clear', methods=['DELETE'])
 def clear_all_queue():
     global queue, deleted_task_ids
-    count = len(queue)
-    
-    # 立即标记所有任务为删除（后台线程会检查这个集合）
-    for item in queue:
-        deleted_task_ids.add(item["id"])
-    
-    add_log("INFO", f"标记 {count} 个任务为删除，后台线程将立即停止处理")
-    
-    # 强制清空队列
-    queue.clear()  # 使用clear()方法确保列表被清空
-    
-    # 立即保存到文件
-    save_data()
-    
-    # 强制再次确认文件已写入
-    try:
-        with open(QUEUE_FILE, 'w', encoding='utf-8') as f:
-            json.dump([], f, ensure_ascii=False, indent=2)
-        add_log("INFO", f"强制清空队列文件: {QUEUE_FILE}")
-    except Exception as e:
-        add_log("ERROR", f"清空队列文件时出错: {str(e)}")
-    
-    update_stats()
-    add_log("INFO", f"Cleared all queue items ({count} items removed)")
-    return jsonify({"status": "success", "count": count})
+    account_id = get_account_id_from_request()
+    if account_id:
+        to_delete = [item for item in queue if item.get("accountId") == account_id]
+        for item in to_delete:
+            deleted_task_ids.add(item["id"])
+        count = len(to_delete)
+        queue = [item for item in queue if item.get("accountId") != account_id]
+        save_data()
+        try:
+            path = os.path.join(DATA_DIR, f"queue_{account_id}.json")
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+            add_log("INFO", f"强制清空队列文件: {path}")
+        except Exception as e:
+            add_log("ERROR", f"清空队列分片文件时出错: {str(e)}")
+        update_stats()
+        add_log("INFO", f"Cleared account queue items ({count} items removed)")
+        return jsonify({"status": "success", "count": count})
+    else:
+        count = len(queue)
+        for item in queue:
+            deleted_task_ids.add(item["id"])
+        add_log("INFO", f"标记 {count} 个任务为删除，后台线程将立即停止处理")
+        queue.clear()
+        save_data()
+        try:
+            with open(QUEUE_FILE, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+            add_log("INFO", f"强制清空队列文件: {QUEUE_FILE}")
+        except Exception as e:
+            add_log("ERROR", f"清空队列文件时出错: {str(e)}")
+        update_stats()
+        add_log("INFO", f"Cleared all queue items ({count} items removed)")
+        return jsonify({"status": "success", "count": count})
 
 @app.route('/api/queue/<id>/status', methods=['PUT'])
 def update_queue_status(id):
@@ -2443,14 +2806,76 @@ def update_queue_status(id):
     
     return jsonify({"status": "success"})
 
+@app.route('/api/queue/<id>', methods=['PUT'])
+def update_queue_item(id):
+    data = request.json or {}
+    item = next((item for item in queue if item["id"] == id), None)
+    if not item:
+        return jsonify({"status": "error", "error": "队列项不存在"}), 404
+
+    # 更新字段：planCode、datacenters、options、retryInterval
+    if data.get("planCode"):
+        item["planCode"] = data.get("planCode")
+    if isinstance(data.get("datacenters"), list):
+        item["datacenters"] = data.get("datacenters")
+    if isinstance(data.get("options"), list):
+        item["options"] = data.get("options")
+    if isinstance(data.get("retryInterval"), (int, float)):
+        item["retryInterval"] = int(data.get("retryInterval"))
+    if isinstance(data.get("quantity"), (int, float)):
+        try:
+            q = int(data.get("quantity"))
+        except Exception:
+            q = 1
+        item["quantity"] = max(1, min(q, 4))
+    item["updatedAt"] = datetime.now().isoformat()
+    # 编辑后重置计数，以便按新配置重新调度
+    item["retryCount"] = 0
+    item["lastCheckTime"] = 0
+
+    save_data()
+    update_stats()
+    add_log("INFO", f"Updated queue item {id} configuration: {item['planCode']} @ {','.join(item.get('datacenters') or [])}")
+    return jsonify({"status": "success"})
+
 @app.route('/api/purchase-history', methods=['GET'])
 def get_purchase_history():
+    account_id = get_account_id_from_request()
+    if account_id:
+        items = [h for h in purchase_history if h.get("accountId") == account_id]
+        return jsonify(items)
     return jsonify(purchase_history)
 
 @app.route('/api/purchase-history', methods=['DELETE'])
 def clear_purchase_history():
     global purchase_history
-    purchase_history = []
+    account_id = get_account_id_from_request()
+    if account_id:
+        purchase_history = [h for h in purchase_history if h.get("accountId") != account_id]
+        try:
+            path = os.path.join(DATA_DIR, f"history_{account_id}.json")
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+            add_log("INFO", f"强制清空抢购历史文件: {path}")
+        except Exception as e:
+            add_log("ERROR", f"清空抢购历史分片文件时出错: {str(e)}")
+    else:
+        purchase_history = []
+        try:
+            with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+            for aid in accounts.keys():
+                path = os.path.join(DATA_DIR, f"history_{aid}.json")
+                if os.path.exists(path):
+                    with open(path, 'w', encoding='utf-8') as f:
+                        json.dump([], f, ensure_ascii=False, indent=2)
+            path_default = os.path.join(DATA_DIR, "history_default.json")
+            if os.path.exists(path_default):
+                with open(path_default, 'w', encoding='utf-8') as f:
+                    json.dump([], f, ensure_ascii=False, indent=2)
+            add_log("INFO", "强制清空所有抢购历史分片文件")
+        except Exception as e:
+            add_log("ERROR", f"清空全部抢购历史文件时出错: {str(e)}")
     save_data()
     update_stats()
     add_log("INFO", "Purchase history cleared")
@@ -2459,13 +2884,14 @@ def clear_purchase_history():
 # 监控相关API
 @app.route('/api/monitor/subscriptions', methods=['GET'])
 def get_subscriptions():
-    """获取订阅列表"""
-    return jsonify(monitor.subscriptions)
+    account_id = get_account_id_from_request()
+    mon = get_monitor_for_account(account_id)
+    return jsonify(mon.subscriptions)
 
 @app.route('/api/monitor/subscriptions', methods=['POST'])
 def add_subscription():
-    """添加订阅"""
     data = request.json
+    account_id = get_account_id_from_request()
     plan_code = data.get("planCode")
     datacenters = data.get("datacenters", [])
     notify_available = data.get("notifyAvailable", True)
@@ -2478,7 +2904,8 @@ def add_subscription():
     # 从 server_plans 中获取服务器名称
     server_name = None
     try:
-        server_info = next((s for s in server_plans if s.get("planCode") == plan_code), None)
+        plans = server_plans
+        server_info = next((s for s in plans if s.get("planCode") == plan_code), None)
         if server_info:
             server_name = server_info.get("name")
             add_log("INFO", f"找到服务器名称: {server_name} ({plan_code})", "monitor")
@@ -2489,12 +2916,13 @@ def add_subscription():
     
     auto_order_quantity = data.get("autoOrderQuantity", 0)  # 自动下单数量，0表示不限制（遵循2分钟限制）
     add_log("INFO", f"[monitor] 添加订阅: planCode={plan_code}, autoOrder={auto_order}, autoOrderQuantity={auto_order_quantity}, 接收到的数据: {list(data.keys())}", "monitor")
-    monitor.add_subscription(plan_code, datacenters, notify_available, notify_unavailable, server_name, None, None, auto_order, auto_order_quantity)
-    save_subscriptions()
+    mon = get_monitor_for_account(account_id)
+    mon.add_subscription(plan_code, datacenters, notify_available, notify_unavailable, server_name, None, None, auto_order, auto_order_quantity)
+    save_subscriptions(account_id)
     
     # 如果监控未运行，自动启动
-    if not monitor.running:
-        monitor.start()
+    if not mon.running:
+        mon.start()
         add_log("INFO", "添加订阅后自动启动监控")
     
     add_log("INFO", f"添加服务器订阅: {plan_code} ({server_name or '未知名称'})")
@@ -2502,13 +2930,14 @@ def add_subscription():
 
 @app.route('/api/monitor/subscriptions/batch-add-all', methods=['OPTIONS', 'POST'])
 def batch_add_all_servers():
-    """批量添加所有服务器到监控（全机房监控）"""
+    account_id = get_account_id_from_request()
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
     global server_plans
     
-    if not server_plans or len(server_plans) == 0:
+    plans = server_plans
+    if not plans or len(plans) == 0:
         return jsonify({"status": "error", "message": "服务器列表为空，请先刷新服务器列表"}), 400
     
     data = request.json or {}
@@ -2520,9 +2949,10 @@ def batch_add_all_servers():
     errors = []
     
     # 获取当前已订阅的服务器列表（避免重复添加）
-    existing_plan_codes = {s.get("planCode") for s in monitor.subscriptions if s.get("planCode")}
+    mon = get_monitor_for_account(account_id)
+    existing_plan_codes = {s.get("planCode") for s in mon.subscriptions if s.get("planCode")}
     
-    for server in server_plans:
+    for server in plans:
         plan_code = server.get("planCode")
         if not plan_code:
             continue
@@ -2537,9 +2967,9 @@ def batch_add_all_servers():
             server_name = server.get("name")
             
             # 添加订阅（datacenters=[] 表示监控所有机房）
-            monitor.add_subscription(
+            mon.add_subscription(
                 plan_code, 
-                datacenters=[],  # 空列表表示监控所有机房
+                datacenters=[],
                 notify_available=notify_available,
                 notify_unavailable=notify_unavailable,
                 server_name=server_name
@@ -2552,11 +2982,11 @@ def batch_add_all_servers():
             add_log("WARNING", f"批量添加订阅失败 {error_msg}", "monitor")
     
     # 保存订阅
-    save_subscriptions()
+    save_subscriptions(account_id)
     
     # 如果监控未运行，自动启动
-    if not monitor.running:
-        monitor.start()
+    if not mon.running:
+        mon.start()
         add_log("INFO", "批量添加订阅后自动启动监控", "monitor")
     
     message = f"已添加 {added_count} 个服务器到监控（全机房监控）"
@@ -2577,11 +3007,12 @@ def batch_add_all_servers():
 
 @app.route('/api/monitor/subscriptions/<plan_code>', methods=['DELETE'])
 def remove_subscription(plan_code):
-    """删除订阅"""
-    success = monitor.remove_subscription(plan_code)
+    account_id = get_account_id_from_request()
+    mon = get_monitor_for_account(account_id)
+    success = mon.remove_subscription(plan_code)
     
     if success:
-        save_subscriptions()
+        save_subscriptions(account_id)
         add_log("INFO", f"删除服务器订阅: {plan_code}")
         return jsonify({"status": "success", "message": f"已取消订阅 {plan_code}"})
     else:
@@ -2589,17 +3020,19 @@ def remove_subscription(plan_code):
 
 @app.route('/api/monitor/subscriptions/clear', methods=['DELETE'])
 def clear_subscriptions():
-    """清空所有订阅"""
-    count = monitor.clear_subscriptions()
-    save_subscriptions()
+    account_id = get_account_id_from_request()
+    mon = get_monitor_for_account(account_id)
+    count = mon.clear_subscriptions()
+    save_subscriptions(account_id)
     
     add_log("INFO", f"清空所有订阅 ({count} 项)")
     return jsonify({"status": "success", "count": count, "message": f"已清空 {count} 个订阅"})
 
 @app.route('/api/monitor/subscriptions/<plan_code>/history', methods=['GET'])
 def get_subscription_history(plan_code):
-    """获取订阅的历史记录"""
-    subscription = next((s for s in monitor.subscriptions if s["planCode"] == plan_code), None)
+    account_id = get_account_id_from_request()
+    mon = get_monitor_for_account(account_id)
+    subscription = next((s for s in mon.subscriptions if s["planCode"] == plan_code), None)
     
     if not subscription:
         return jsonify({"status": "error", "message": "订阅不存在"}), 404
@@ -2616,8 +3049,9 @@ def get_subscription_history(plan_code):
 
 @app.route('/api/monitor/start', methods=['POST'])
 def start_monitor():
-    """启动监控"""
-    success = monitor.start()
+    account_id = get_account_id_from_request()
+    mon = get_monitor_for_account(account_id)
+    success = mon.start()
     
     if success:
         add_log("INFO", "用户启动服务器监控")
@@ -2627,8 +3061,9 @@ def start_monitor():
 
 @app.route('/api/monitor/stop', methods=['POST'])
 def stop_monitor():
-    """停止监控"""
-    success = monitor.stop()
+    account_id = get_account_id_from_request()
+    mon = get_monitor_for_account(account_id)
+    success = mon.stop()
     
     if success:
         add_log("INFO", "用户停止服务器监控")
@@ -2638,8 +3073,9 @@ def stop_monitor():
 
 @app.route('/api/monitor/status', methods=['GET'])
 def get_monitor_status():
-    """获取监控状态"""
-    status = monitor.get_status()
+    account_id = get_account_id_from_request()
+    mon = get_monitor_for_account(account_id)
+    status = mon.get_status()
     return jsonify(status)
 
 @app.route('/api/monitor/interval', methods=['PUT'])
@@ -2656,7 +3092,8 @@ def set_telegram_webhook():
         data = request.json or {}
         webhook_url = data.get('webhook_url')
         
-        tg_token = config.get("tgToken")
+        acc_cfg = get_current_account_config()
+        tg_token = acc_cfg.get("tgToken") or config.get("tgToken")
         if not tg_token:
             return jsonify({"success": False, "error": "未配置 Telegram Bot Token"}), 400
         
@@ -2730,7 +3167,8 @@ def get_telegram_webhook_info():
     获取当前 Telegram Bot Webhook 信息
     """
     try:
-        tg_token = config.get("tgToken")
+        acc_cfg = get_current_account_config()
+        tg_token = acc_cfg.get("tgToken") or config.get("tgToken")
         if not tg_token:
             return jsonify({"success": False, "error": "未配置 Telegram Bot Token"}), 400
         
@@ -2837,11 +3275,11 @@ def telegram_webhook():
                             
                             add_log("INFO", f"✅ 从UUID缓存恢复配置: UUID={message_uuid}, {plan_code}@{datacenter}, options={options}", "telegram")
                             
-                            # 添加到抢购队列
+                            # 添加到抢购队列（使用数组形式机房）
                             queue_item = {
                                 "id": str(uuid.uuid4()),
                                 "planCode": plan_code,
-                                "datacenter": datacenter,
+                                "datacenters": [datacenter] if datacenter else [],
                                 "options": options,
                                 "status": "running",
                                 "createdAt": datetime.now().isoformat(),
@@ -2849,7 +3287,8 @@ def telegram_webhook():
                                 "retryInterval": 30,
                                 "retryCount": 0,
                                 "lastCheckTime": 0,
-                                "fromTelegram": True  # 标记来自Telegram
+                                "fromTelegram": True,  # 标记来自Telegram
+                                "accountId": get_account_id_from_request()
                             }
                             
                             queue.append(queue_item)
@@ -2920,11 +3359,11 @@ def telegram_webhook():
                 if not plan_code or not datacenter:
                     return jsonify({"ok": False, "error": "Missing planCode or datacenter"}), 400
                 
-                # 添加到抢购队列
+                # 添加到抢购队列（使用数组形式机房）
                 queue_item = {
                     "id": str(uuid.uuid4()),
                     "planCode": plan_code,
-                    "datacenter": datacenter,
+                    "datacenters": [datacenter] if datacenter else [],
                     "options": options,  # 确保使用恢复后的 options
                     "status": "running",
                     "createdAt": datetime.now().isoformat(),
@@ -2932,7 +3371,8 @@ def telegram_webhook():
                     "retryInterval": 30,
                     "retryCount": 0,
                     "lastCheckTime": 0,
-                    "fromTelegram": True  # 标记来自Telegram
+                    "fromTelegram": True,  # 标记来自Telegram
+                    "accountId": get_account_id_from_request()
                 }
                 
                 queue.append(queue_item)
@@ -3098,7 +3538,7 @@ def telegram_webhook():
                         queue_item = {
                             "id": str(uuid.uuid4()),
                             "planCode": config_info["planCode"],
-                            "datacenter": config_info["datacenter"],
+                            "datacenters": [config_info["datacenter"]] if config_info.get("datacenter") else [],
                             "options": config_info["options"],
                             "status": "running",
                             "createdAt": datetime.now().isoformat(),
@@ -3106,7 +3546,8 @@ def telegram_webhook():
                             "retryInterval": 30,
                             "retryCount": 0,
                             "lastCheckTime": 0,
-                            "fromTelegram": True
+                            "fromTelegram": True,
+                            "accountId": get_account_id_from_request()
                         }
                         queue.append(queue_item)
                         added_count += 1
@@ -3195,20 +3636,19 @@ def get_servers():
     
     # 如果缓存有效且不是强制刷新，使用缓存
     if cache_valid and not force_refresh:
-        add_log("INFO", f"使用缓存的服务器列表 (缓存时间: {cache_age_minutes} 分钟前)")
+        add_log("INFO", f"使用全局缓存的服务器列表 (缓存时间: {cache_age_minutes} 分钟前)")
         server_plans = server_list_cache["data"]
-    elif show_api_servers and get_ovh_client():
+    elif show_api_servers and get_client_from_request():
         # 缓存失效或强制刷新，从API重新加载
         add_log("INFO", "正在从OVH API重新加载服务器列表...")
         api_servers = load_server_list()
         if api_servers and len(api_servers) > 0:  # 确保返回有效数据
             server_plans = api_servers
-            # 更新缓存
             server_list_cache["data"] = api_servers
             server_list_cache["timestamp"] = time.time()
             save_data()
             update_stats()
-            add_log("INFO", f"从OVH API加载了 {len(server_plans)} 台服务器，已更新缓存")
+            add_log("INFO", f"从OVH API加载了 {len(server_plans)} 台服务器，已更新全局缓存")
             
             # 记录硬件信息统计
             cpu_count = sum(1 for s in server_plans if s["cpu"] != "N/A")
@@ -3225,7 +3665,7 @@ def get_servers():
                 # 内存缓存有数据，使用过期缓存
                 server_plans = server_list_cache["data"]
                 using_expired_cache = True
-                add_log("WARNING", f"⚠️ OVH API 调用失败，使用过期缓存数据（{cache_age_minutes} 分钟前，共 {len(server_plans)} 台服务器）")
+                add_log("WARNING", f"⚠️ OVH API 调用失败，使用全局过期缓存（{cache_age_minutes} 分钟前，共 {len(server_plans)} 台服务器）")
             elif len(server_plans) > 0:
                 # 全局变量有数据（可能是从文件加载的），使用全局变量
                 using_expired_cache = True
@@ -3240,7 +3680,7 @@ def get_servers():
     elif not cache_valid and server_list_cache["data"]:
         # 缓存过期但未认证或未配置 OVH API，使用过期缓存
         using_expired_cache = True
-        add_log("WARNING", f"⚠️ 缓存已过期（{cache_age_minutes} 分钟前）但未配置 OVH API，使用过期缓存数据")
+        add_log("WARNING", f"⚠️ 缓存已过期（{cache_age_minutes} 分钟前）但未配置 OVH API，使用全局过期缓存数据")
         server_plans = server_list_cache["data"]
     
     # 确保返回的服务器对象具有所有必要字段
@@ -3339,7 +3779,7 @@ def _convert_display_dc_to_api_dc(datacenter):
     }
     dc_lower = datacenter.lower()
     return dc_map.get(dc_lower, dc_lower)
-def _get_server_price_internal(plan_code, datacenter='gra', options=None):
+def _get_server_price_internal(plan_code, datacenter='gra', options=None, account_id=None):
     """
     内部函数：获取配置后的服务器价格（不实际下单）
     
@@ -3363,7 +3803,7 @@ def _get_server_price_internal(plan_code, datacenter='gra', options=None):
     # 转换数据中心代码（前端显示代码 → OVH API代码）
     api_datacenter = _convert_display_dc_to_api_dc(datacenter)
     
-    client = get_ovh_client()
+    client = get_ovh_client(account_id)
     if not client:
         return {"success": False, "error": "未配置OVH API密钥", "price": None}
     
@@ -3372,7 +3812,8 @@ def _get_server_price_internal(plan_code, datacenter='gra', options=None):
         add_log("INFO", f"查询 {plan_code} 的配置价格，数据中心: {api_datacenter} (原始: {datacenter}), 选项: {options}", "price")
         
         # 1. 创建购物车
-        cart_result = client.post('/order/cart', ovhSubsidiary=config["zone"])
+        zone_cfg = get_current_account_config(account_id)
+        cart_result = client.post('/order/cart', ovhSubsidiary=zone_cfg["zone"])
         cart_id = cart_result["cartId"]
         add_log("DEBUG", f"购物车创建成功，ID: {cart_id}", "price")
         
@@ -3588,9 +4029,14 @@ def _get_server_price_internal(plan_code, datacenter='gra', options=None):
         # 标记plan_code为有效（历史上有过价格查询成功）
         # 用于自动下单时跳过价格核验，加快下单速度
         try:
-            global monitor
-            if monitor and hasattr(monitor, 'valid_plan_codes'):
-                monitor.valid_plan_codes.add(plan_code)
+            global monitors
+            mon = None
+            if account_id and account_id in monitors:
+                mon = monitors[account_id]
+            elif 'monitor' in globals() and monitor:
+                mon = monitor
+            if mon and hasattr(mon, 'valid_plan_codes'):
+                mon.valid_plan_codes.add(plan_code)
                 add_log("DEBUG", f"标记plan_code为有效: {plan_code}（历史上有过价格查询成功）", "price")
         except Exception as e:
             add_log("WARNING", f"标记plan_code为有效时出错: {str(e)}", "price")
@@ -3664,9 +4110,10 @@ def get_server_price(plan_code):
     data = request.json or {}
     datacenter = data.get('datacenter', 'gra')
     options = data.get('options', [])
+    account_id = get_account_id_from_request()
     
     # 调用内部函数
-    result = _get_server_price_internal(plan_code, datacenter, options)
+    result = _get_server_price_internal(plan_code, datacenter, options, account_id)
     
     if result.get("success"):
         return jsonify(result)
@@ -3691,12 +4138,13 @@ def get_monitor_price():
         plan_code = data.get('plan_code')
         datacenter = data.get('datacenter', 'gra')
         options = data.get('options', [])
+        account_id = data.get('accountId') or get_account_id_from_request()
         
         if not plan_code:
             return jsonify({"success": False, "error": "缺少 plan_code 参数"}), 400
         
         # 调用内部函数获取价格
-        result = _get_server_price_internal(plan_code, datacenter, options)
+        result = _get_server_price_internal(plan_code, datacenter, options, account_id)
         
         return jsonify(result)
         
@@ -3710,6 +4158,68 @@ def get_monitor_price():
 def get_stats():
     update_stats()
     return jsonify(stats)
+
+@app.route('/api/stats/accounts', methods=['GET'])
+def get_stats_per_account():
+    result = {}
+    try:
+        all_accounts = list(accounts.keys()) or [None]
+        for aid in all_accounts:
+            acc_key = aid or 'default'
+            # 队列
+            active_count = sum(1 for item in queue if item.get("accountId") == aid and item.get("status") in ["running", "pending", "paused"])
+            total_servers = len(server_plans)
+            # 可用性统计（近似）：根据列表中的datacenters可用项统计
+            available_count = 0
+            plans = server_plans
+            for server in plans:
+                for dc in server.get("datacenters", []):
+                    if dc.get("availability") not in ["unavailable", "unknown"]:
+                        available_count += 1
+                        break
+            # 购买历史
+            success_count = sum(1 for h in purchase_history if h.get("accountId") == aid and h.get("status") == "success")
+            failed_count = sum(1 for h in purchase_history if h.get("accountId") == aid and h.get("status") == "failed")
+            # 监控状态
+            mon = monitors.get(aid)
+            monitor_running = bool(mon and mon.running)
+            result[acc_key] = {
+                "activeQueues": active_count,
+                "totalServers": total_servers,
+                "availableServers": available_count,
+                "purchaseSuccess": success_count,
+                "purchaseFailed": failed_count,
+                "monitorRunning": monitor_running
+            }
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"accounts": result})
+
+@app.route('/api/debug/account', methods=['GET'])
+def debug_account_info():
+    try:
+        hdr_aid = None
+        try:
+            hdr_aid = request.headers.get('X-OVH-Account')
+        except Exception:
+            hdr_aid = None
+        aid = get_account_id_from_request()
+        cfg = get_current_account_config(aid)
+        exists = bool(aid and accounts.get(aid))
+        return jsonify({
+            "headerAccountId": hdr_aid,
+            "requestedAccountId": aid,
+            "exists": exists,
+            "alias": cfg.get("alias"),
+            "endpoint": cfg.get("endpoint"),
+            "zone": cfg.get("zone"),
+            "hasAppKey": bool(cfg.get("appKey")),
+            "hasAppSecret": bool(cfg.get("appSecret")),
+            "hasConsumerKey": bool(cfg.get("consumerKey")),
+            
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/cache/info', methods=['GET'])
 def get_cache_info():
@@ -3891,7 +4401,7 @@ def find_matching_api2_plans(config_fingerprint, target_plancode_base=None, excl
         return []
     
     try:
-        catalog = client.get(f'/order/catalog/public/eco?ovhSubsidiary={config["zone"]}')
+        catalog = client.get(f"/order/catalog/public/eco?ovhSubsidiary={zone}")
         matched_plancodes = []
         
         # 配置匹配模式：查找所有相同配置的型号
@@ -4213,7 +4723,8 @@ def check_and_queue_plancode(api2_plancode, task, bound_config, client):
                 hardware_options = []
                 try:
                     # 获取该 planCode 的配置选项
-                    catalog = client.get(f'/order/catalog/public/eco?ovhSubsidiary={config["zone"]}')
+                    zone_cfg = get_current_account_config()
+                    catalog = client.get(f"/order/catalog/public/eco?ovhSubsidiary={zone_cfg['zone']}")
                     for plan in catalog.get("plans", []):
                         if plan.get("planCode") == api2_plancode:
                             addon_families = plan.get("addonFamilies", [])
@@ -4552,7 +5063,7 @@ def quick_order():
         if not options:
             try:
                 # 使用"配置级别"的可用性，包含 memory/storage 以及匹配到的 API2 addons（options）
-                availability_by_config = check_server_availability_with_configs(plancode) or {}
+                availability_by_config = check_server_availability_with_configs(plancode, account_id) or {}
                 # 严格挑选：指定机房在该配置下为可售（非 unavailable/unknown），且能解析出 addons 选项
                 selected_cfg = None
                 for _, cfg in availability_by_config.items():
@@ -4591,7 +5102,7 @@ def quick_order():
             with_tax = 0.0
         else:
             # 先通过临时购物车获取价格，确保该组合可下单（无价格则不支持下单）
-            price_result = _get_server_price_internal(plancode, datacenter, options)
+            price_result = _get_server_price_internal(plancode, datacenter, options, account_id)
             if not price_result.get("success"):
                 err = price_result.get("error") or "价格查询失败"
                 add_log("WARNING", f"快速下单前价格校验失败: {plancode}@{datacenter} - {err}", "config_sniper")
@@ -4606,6 +5117,7 @@ def quick_order():
 
         # 检查是否跳过重复检查（用于批量下单，不受2分钟限制）
         skip_duplicate_check = data.get('skipDuplicateCheck', False)
+        account_id = get_account_id_from_request()
         
         # 防重复（仅限 quick-order）：若同一 planCode+datacenter+options（配置指纹）
         # 已在队列运行/等待，或刚刚成功下过单，则拒绝再次入队
@@ -4632,7 +5144,8 @@ def quick_order():
                     item.get("planCode") == plancode and
                     item.get("datacenter") == datacenter and
                     item.get("status") in ["running", "pending", "paused"] and
-                    _fingerprint(item.get("options")) == target_fp
+                    _fingerprint(item.get("options")) == target_fp and
+                    item.get("accountId") == account_id
                 ):
                     add_log("INFO", f"检测到重复的队列任务（含配置），拒绝再次入队: {plancode}@{datacenter} options={options} (任务ID: {item.get('id')})", "config_sniper")
                     return jsonify({"success": False, "error": "已存在相同配置的购买任务，稍后再试"}), 429
@@ -4642,7 +5155,8 @@ def quick_order():
                     hist.get("planCode") == plancode and
                     hist.get("datacenter") == datacenter and
                     hist.get("status") == "success" and
-                    _fingerprint(hist.get("options")) == target_fp
+                    _fingerprint(hist.get("options")) == target_fp and
+                    hist.get("accountId") == account_id
                 ):
                     try:
                         ts = hist.get("purchaseTime")
@@ -4660,7 +5174,7 @@ def quick_order():
         queue_item = {
             "id": str(uuid.uuid4()),
             "planCode": plancode,
-            "datacenter": datacenter,
+            "datacenters": [datacenter] if datacenter else [],
             "options": options,
             "status": "running",
             "retryCount": 0,
@@ -4671,7 +5185,8 @@ def quick_order():
             "updatedAt": current_time,
             "lastCheckTime": 0,
             "quickOrder": True,  # 标记为快速下单
-            "priority": 100
+            "priority": 100,
+            "accountId": account_id
         }
         
         # 将快速下单任务插入队列头部，提高优先级
@@ -4728,7 +5243,7 @@ def get_my_servers():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
-    client = get_ovh_client()
+    client = get_client_from_request()
     if not client:
         return jsonify({"success": False, "error": "未配置OVH API密钥"}), 401
     
@@ -4785,7 +5300,7 @@ def reboot_server(service_name):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
-    client = get_ovh_client()
+    client = get_client_from_request()
     if not client:
         return jsonify({"success": False, "error": "未配置OVH API密钥"}), 401
     
@@ -4810,7 +5325,7 @@ def get_os_templates(service_name):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
-    client = get_ovh_client()
+    client = get_client_from_request()
     if not client:
         return jsonify({"success": False, "error": "未配置OVH API密钥"}), 401
     
@@ -5015,13 +5530,14 @@ def install_os(service_name):
         import hashlib
         
         # 根据endpoint配置动态构建API URL
-        base_url = get_api_base_url()
+        acc_cfg = get_current_account_config()
+        base_url = get_api_base_url_for(acc_cfg.get('endpoint'))
         api_url = f"{base_url}/1.0/dedicated/server/{service_name}/reinstall"
         
         # 获取认证信息
-        app_key = config.get('appKey', '')
-        app_secret = config.get('appSecret', '')
-        consumer_key = config.get('consumerKey', '')
+        app_key = acc_cfg.get('appKey', '')
+        app_secret = acc_cfg.get('appSecret', '')
+        consumer_key = acc_cfg.get('consumerKey', '')
         
         # 生成签名
         timestamp = str(int(time.time()))
@@ -5194,7 +5710,7 @@ def get_install_status(service_name):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
-    client = get_ovh_client()
+    client = get_client_from_request()
     if not client:
         return jsonify({"success": False, "error": "未配置OVH API密钥"}), 401
     
@@ -8654,6 +9170,140 @@ def get_account_bills():
             "status": "error",
             "message": f"获取账单列表失败: {str(e)}"
         }), 500
+
+@app.route('/api/accounts', methods=['GET', 'POST'])
+def accounts_api():
+    if request.method == 'GET':
+        return jsonify({
+            "accounts": list(accounts.values())
+        })
+    data = request.json or {}
+    acc_id = data.get('id')
+    alias = data.get('alias')
+    # 如果未提供账户ID，则尝试用提供的OVH凭据自动解析
+    if not acc_id:
+        app_key = data.get('appKey')
+        app_secret = data.get('appSecret')
+        consumer_key = data.get('consumerKey')
+        endpoint = data.get('endpoint') or 'ovh-eu'
+        if not app_key or not app_secret or not consumer_key:
+            return jsonify({"success": False, "error": "缺少账户id且未提供OVH凭据"}), 400
+        try:
+            client = ovh.Client(
+                endpoint=endpoint,
+                application_key=app_key,
+                application_secret=app_secret,
+                consumer_key=consumer_key
+            )
+            me = client.get('/me')
+            acc_id = me.get('customerCode') or me.get('nichandle')
+            alias = alias or me.get('email') or acc_id
+        except Exception as e:
+            qid = None
+            try:
+                resp = getattr(e, 'httpResponse', None)
+                if resp:
+                    qid = resp.headers.get('OVH-Query-ID') or resp.headers.get('X-Ovh-QueryID')
+            except Exception:
+                pass
+            err_msg = f"自动解析账户信息失败: {str(e)}"
+            if qid:
+                err_msg = f"{err_msg} OVH-Query-ID: {qid}"
+            return jsonify({"success": False, "error": err_msg}), 400
+    accounts[acc_id] = {
+        "id": acc_id,
+        "alias": alias,
+        "appKey": data.get('appKey', ''),
+        "appSecret": data.get('appSecret', ''),
+        "consumerKey": data.get('consumerKey', ''),
+        "endpoint": data.get('endpoint', 'ovh-eu'),
+        "zone": data.get('zone', 'IE'),
+        "tgToken": data.get('tgToken', ''),
+        "tgChatId": data.get('tgChatId', '')
+    }
+    save_accounts()
+    return jsonify({"success": True, "account": accounts[acc_id]})
+
+@app.route('/api/accounts/<account_id>', methods=['DELETE'])
+def delete_account(account_id):
+    global queue, deleted_task_ids
+    if account_id in accounts:
+        del accounts[account_id]
+        try:
+            # 停止并移除该账户的监控器
+            if account_id in monitors:
+                mon = monitors.pop(account_id)
+                if mon and mon.running:
+                    mon.stop()
+            # 删除订阅分片文件
+            sub_path = os.path.join(DATA_DIR, f"subscriptions_{account_id}.json")
+            if os.path.exists(sub_path):
+                os.remove(sub_path)
+            # 清理该账户相关的队列项
+            to_delete = [item for item in queue if item.get("accountId") == account_id]
+            for item in to_delete:
+                try:
+                    deleted_task_ids.add(item["id"])  # 标记为删除，后台线程立即停止处理
+                except Exception:
+                    pass
+            queue = [item for item in queue if item.get("accountId") != account_id]
+            # 强制清空该账户的队列分片文件
+            q_path = os.path.join(DATA_DIR, f"queue_{account_id}.json")
+            try:
+                with open(q_path, 'w', encoding='utf-8') as f:
+                    json.dump([], f, ensure_ascii=False, indent=2)
+                add_log("INFO", f"强制清空队列文件: {q_path}", "accounts")
+            except Exception as e:
+                add_log("ERROR", f"清空队列分片文件时出错: {str(e)}", "accounts")
+            # 保存与更新统计
+            save_data()
+            update_stats()
+            add_log("INFO", f"删除账户 {account_id} 并清理 {len(to_delete)} 个队列项", "accounts")
+        except Exception as e:
+            add_log("ERROR", f"删除账户 {account_id} 时发生错误: {str(e)}", "accounts")
+        save_accounts()
+        return jsonify({"success": True})
+    return jsonify({"success": False, "error": "账户不存在"}), 404
+
+
+@app.route('/api/accounts/resolve-info', methods=['POST'])
+def resolve_account_info():
+    data = request.json or {}
+    app_key = data.get('appKey')
+    app_secret = data.get('appSecret')
+    consumer_key = data.get('consumerKey')
+    endpoint = data.get('endpoint') or 'ovh-eu'
+    if not app_key or not app_secret or not consumer_key:
+        return jsonify({"success": False, "error": "缺少凭据"}), 400
+    try:
+        client = ovh.Client(
+            endpoint=endpoint,
+            application_key=app_key,
+            application_secret=app_secret,
+            consumer_key=consumer_key
+        )
+        me = client.get('/me')
+        customer_code = me.get('customerCode') or me.get('nichandle')
+        email = me.get('email')
+        return jsonify({
+            "success": True,
+            "customerCode": customer_code,
+            "email": email,
+            "nichandle": me.get('nichandle')
+        })
+    except Exception as e:
+        qid = None
+        try:
+            resp = getattr(e, 'httpResponse', None)
+            if resp:
+                qid = resp.headers.get('OVH-Query-ID') or resp.headers.get('X-Ovh-QueryID')
+        except Exception:
+            pass
+        msg = str(e)
+        if qid:
+            msg = f"{msg} OVH-Query-ID: {qid}"
+        add_log("ERROR", f"解析账户信息失败: {msg}", "accounts")
+        return jsonify({"success": False, "error": msg}), 400
 
 if __name__ == '__main__':
     # 确保所有文件都存在

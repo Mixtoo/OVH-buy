@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 
 // localStorage 密钥
 const API_SECRET_KEY_STORAGE = 'api_secret_key';
+const CURRENT_ACCOUNT_ID_KEY = 'current_account_id';
 
 /**
  * 获取存储的 API 密钥
@@ -31,6 +32,18 @@ export const clearApiSecretKey = (): void => {
   localStorage.removeItem(API_SECRET_KEY_STORAGE);
 };
 
+export const getCurrentAccountId = (): string => {
+  return localStorage.getItem(CURRENT_ACCOUNT_ID_KEY) || '';
+};
+
+export const setCurrentAccountId = (id: string): void => {
+  localStorage.setItem(CURRENT_ACCOUNT_ID_KEY, id);
+};
+
+export const clearCurrentAccountId = (): void => {
+  localStorage.removeItem(CURRENT_ACCOUNT_ID_KEY);
+};
+
 /**
  * 创建axios实例
  */
@@ -51,6 +64,10 @@ apiClient.interceptors.request.use(
     const apiKey = getApiSecretKey();
     if (apiKey) {
       config.headers['X-API-Key'] = apiKey;
+    }
+    const accId = getCurrentAccountId();
+    if (accId) {
+      config.headers['X-OVH-Account'] = accId;
     }
     
     // 添加时间戳（可选，用于防重放攻击）

@@ -50,9 +50,13 @@ ENV/
 .idea/
 *.swp
 *.swo
+.trae/
 
 # Backend data files (sensitive)
 backend/data/
 backend/cache/
 backend/logs/
-.trae/
+backend/nohup.out
+/data/
+/cache/
+/logs/

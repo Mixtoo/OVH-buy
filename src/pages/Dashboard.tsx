@@ -18,15 +18,17 @@ interface StatsType {
 interface QueueItem {
   id: string;
   planCode: string;
-  datacenter: string;
+  datacenter?: string;
+  datacenters?: string[];
   status: string;
   retryCount: number;
   retryInterval: number;
   createdAt: string;
+  accountId?: string;
 }
 
 const Dashboard = () => {
-  const { isAuthenticated } = useAPI();
+  const { isAuthenticated, accounts } = useAPI();
   const [stats, setStats] = useState<StatsType>({
     activeQueues: 0,
     totalServers: 0,
@@ -39,12 +41,18 @@ const Dashboard = () => {
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  const getAccountLabel = (id?: string) => {
+    if (!id) return '默认账户';
+    const acc = accounts.find((a: any) => a?.id === id);
+    return acc?.alias || id;
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         const [statsResponse, queueResponse] = await Promise.all([
           api.get(`/stats`),
-          api.get(`/queue`)
+          api.get(`/queue/all`)
         ]);
         setStats(statsResponse.data);
         // 只显示活跃的队列项（running, pending, paused），最多3个
@@ -176,7 +184,7 @@ const Dashboard = () => {
 
         {/* 抢购成功 */}
         <motion.div variants={itemVariants} className="cyber-card relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-16 h-16 -mr-6 -mt-6 bg-green-500/10 rounded-full blur-xl"></div>
+          <div className="absolute top-0 right-0 w-16 h-16 -mr-6 -mt-6 bg-green-500/10 rounded-full opacity-40"></div>
           <div className="flex justify-between items-start">
             <div>
               <h3 className="text-cyber-muted text-sm mb-1">抢购成功</h3>
@@ -205,7 +213,7 @@ const Dashboard = () => {
 
         {/* 抢购失败 */}
         <motion.div variants={itemVariants} className="cyber-card relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-16 h-16 -mr-6 -mt-6 bg-red-500/10 rounded-full blur-xl"></div>
+          <div className="absolute top-0 right-0 w-16 h-16 -mr-6 -mt-6 bg-red-500/10 rounded-full opacity-40"></div>
           <div className="flex justify-between items-start">
             <div>
               <h3 className="text-cyber-muted text-sm mb-1">抢购失败</h3>
@@ -290,13 +298,35 @@ const Dashboard = () => {
                           <circle cx="12" cy="12" r="10"></circle>
                           <polyline points="12 6 12 12 16 14"></polyline>
                         </svg>
-                        {item.datacenter.toUpperCase()}
+                        
+                      {(() => {
+                        const list = Array.isArray(item.datacenters) && item.datacenters.length > 0 ? item.datacenters : (item.datacenter ? [item.datacenter] : []);
+                        if (list.length > 1) {
+                          return (
+                            <span className="ml-2 px-2 py-0.5 text-[11px] bg-cyber-accent/20 text-cyber-accent rounded-full">
+                              机房优先级：{list.map(dc => dc.toUpperCase()).join(' > ')}
+                            </span>
+                          );
+                        }
+                        if (list.length === 1) {
+                          return (
+                            <span className="ml-2 px-2 py-0.5 text-[11px] bg-cyber-accent/20 text-cyber-accent rounded-full">
+                              机房：{list[0].toUpperCase()}
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
                       </span>
                       <span className="text-cyber-grid">•</span>
                       <span>第 {item.retryCount + 1} 次尝试</span>
+                      <span className="text-cyber-grid">•</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+                    <span className="px-2 py-0.5 text-[11px] bg-slate-600/30 text-slate-200 rounded-full">
+                      账户：{getAccountLabel(item.accountId)}
+                    </span>
                     <span className={`text-sm px-3 py-1.5 rounded-lg flex items-center font-medium ${
                       item.status === 'running' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
                       item.status === 'pending' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
@@ -331,6 +361,13 @@ const Dashboard = () => {
               <span className={`flex items-center text-sm font-semibold ${isAuthenticated ? 'text-green-400' : 'text-red-400'}`}>
                 <span className={`w-2.5 h-2.5 rounded-full mr-2 ${isAuthenticated ? 'bg-green-400 animate-pulse shadow-lg shadow-green-400/50' : 'bg-red-400'}`}></span>
                 {isAuthenticated ? '已连接' : '未连接'}
+              </span>
+            </div>
+            <div className="flex justify-between items-center p-3 rounded-lg bg-cyber-grid/5 hover:bg-cyber-grid/10 transition-colors">
+              <span className="text-cyber-text text-sm font-medium">已连接账户</span>
+              <span className={`flex items-center text-sm font-semibold ${(accounts?.length || 0) > 0 ? 'text-green-400' : 'text-cyber-muted'}`}>
+                <span className={`w-2.5 h-2.5 rounded-full mr-2 ${(accounts?.length || 0) > 0 ? 'bg-green-400 animate-pulse shadow-lg shadow-green-400/50' : 'bg-cyber-muted'}`}></span>
+                {(accounts?.length || 0)} 个
               </span>
             </div>
             <div className="flex justify-between items-center p-3 rounded-lg bg-cyber-grid/5 hover:bg-cyber-grid/10 transition-colors">

@@ -1,47 +1,17 @@
+version: "3.8"
 services:
-  nginx:
-    image: nginx:alpine
-    container_name: ovh-nginx
+  ovh-app:
+    image: iniwex/ovh:latest
+    container_name: OVH
     ports:
       - "20000:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - backend
-      - frontend
-    restart: unless-stopped
-    networks:
-      - ovh-network
-
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
-    container_name: ovh-backend
-    expose:
-      - "19998"
-    volumes:
-      - ./backend/.env:/app/backend/.env
-      - ./backend/data:/app/backend/data
-      - ./backend/logs:/app/backend/logs
-      - ./backend/cache:/app/backend/cache
-    restart: unless-stopped
-    networks:
-      - ovh-network
-
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-    container_name: ovh-frontend
-    expose:
-      - "19999"
     environment:
+      - DEBUG=false
       - VITE_API_URL=/api
+      - API_SECRET_KEY=你得替换为你自己的密钥
+      - ENABLE_API_KEY_AUTH=true
+    volumes:
+      - ./data:/app/backend/data
+      - ./logs:/app/backend/logs
+      - ./cache:/app/backend/cache
     restart: unless-stopped
-    networks:
-      - ovh-network
-
-networks:
-  ovh-network:
-    driver: bridge

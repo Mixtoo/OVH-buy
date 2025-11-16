@@ -37,26 +37,27 @@
 
 ### Docker 部署
 
-1. **克隆仓库**
-   ```bash
-   git clone [仓库地址]
-   cd 1112
-   ```
-
-2. **配置环境变量**
-   编辑 `backend/.env` 文件：
-   ```env
-   API_SECRET_KEY=your_secure_key_here
-   ```
-
-3. **启动服务**
-   ```bash
-   docker-compose up -d --build
-   ```
-
-4. **访问系统**
-   - 管理界面：http://YOUR_IP:20000
-   - 初始配置：http://YOUR_IP:20000/settings
+使用compose部署
+```
+version: "3.8"
+services:
+  ovh-app:
+    image: iniwex/ovh:latest
+    container_name: OVH
+    ports:
+      - "20000:80"
+    environment:
+      - DEBUG=false
+      - VITE_API_URL=/api
+      - API_SECRET_KEY=你得替换为你自己的密钥
+      - ENABLE_API_KEY_AUTH=true
+    volumes:
+      - ./data:/app/backend/data
+      - ./logs:/app/backend/logs
+      - ./cache:/app/backend/cache
+    restart: unless-stopped
+```
+其中`API_SECRET_KEY`需要替换为你自己的密钥
 
 ### 1Panel 反向代理配置
 

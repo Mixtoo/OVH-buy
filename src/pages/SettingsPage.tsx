@@ -25,7 +25,11 @@ const SettingsPage = () => {
     isLoading,
     isAuthenticated,
     setAPIKeys,
-    checkAuthentication
+    checkAuthentication,
+    accounts,
+    currentAccountId,
+    setCurrentAccount,
+    refreshAccounts
   } = useAPI();
 
   const [formValues, setFormValues] = useState({
@@ -47,6 +51,18 @@ const SettingsPage = () => {
     consumerKey: false,
     tgToken: false
   });
+  const [accountForm, setAccountForm] = useState({
+    id: "",
+    alias: "",
+    appKey: "",
+    appSecret: "",
+    consumerKey: "",
+    endpoint: "ovh-eu",
+    zone: "IE",
+    tgToken: "",
+    tgChatId: ""
+  });
+  const [isSubmittingAccount, setIsSubmittingAccount] = useState(false);
   
   // Telegram Webhook 相关状态
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -54,6 +70,9 @@ const SettingsPage = () => {
   const [isSettingWebhook, setIsSettingWebhook] = useState(false);
   const [isLoadingWebhookInfo, setIsLoadingWebhookInfo] = useState(false);
   const [showErrorHistoryDialog, setShowErrorHistoryDialog] = useState(false);
+  const [apiKeyValid, setApiKeyValid] = useState<boolean | null>(null);
+  const [ovhAuthValid, setOvhAuthValid] = useState<boolean | null>(null);
+  const accountFieldsHidden = true;
 
   // Load current values when component mounts
   useEffect(() => {
@@ -190,6 +209,28 @@ const SettingsPage = () => {
     };
   };
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const key = getApiSecretKey();
+        if (!key) {
+          setApiKeyValid(false);
+        } else {
+          await api.get('/settings');
+          setApiKeyValid(true);
+        }
+      } catch {
+        setApiKeyValid(false);
+      }
+      try {
+        const valid = await checkAuthentication();
+        setOvhAuthValid(!!valid);
+      } catch {
+        setOvhAuthValid(false);
+      }
+    })();
+  }, []);
+
   // Handle input changes
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -242,6 +283,7 @@ const SettingsPage = () => {
         } else {
           toast.warning("OVH API 配置已保存，但验证失败，请检查密钥是否正确");
           setIsSaving(false);
+          setOvhAuthValid(false);
         }
       } else {
         // 如果没填写 OVH API，只保存了访问密码
@@ -258,6 +300,60 @@ const SettingsPage = () => {
     }
   };
 
+  const handleAccountFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setAccountForm(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleAddOrUpdateAccount = async () => {
+    if (!accountForm.id) {
+      toast.error('请输入账户ID');
+      return;
+    }
+    setIsSubmittingAccount(true);
+    try {
+      const res = await api.post('/accounts', accountForm);
+      if (res.data?.success) {
+        toast.success('账户已保存');
+        await refreshAccounts();
+      } else {
+        toast.error(res.data?.error || '保存失败');
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || error.message || '保存失败');
+    } finally {
+      setIsSubmittingAccount(false);
+    }
+  };
+
+  const handleDeleteAccount = async (id: string) => {
+    try {
+      const res = await api.delete(`/accounts/${id}`);
+      if (res.data?.success) {
+        toast.success('账户已删除');
+        await refreshAccounts();
+      } else {
+        toast.error(res.data?.error || '删除失败');
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || error.message || '删除失败');
+    }
+  };
+
+  const handleSetDefaultAccount = async (id: string) => {
+    try {
+      const res = await api.put('/accounts/default', { id });
+      if (res.data?.success) {
+        toast.success('默认账户已设置');
+        await refreshAccounts();
+      } else {
+        toast.error(res.data?.error || '设置失败');
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || error.message || '设置失败');
+    }
+  };
+
   return (
     <div className="space-y-4 sm:space-y-6">
       <motion.div
@@ -265,8 +361,8 @@ const SettingsPage = () => {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
       >
-        <h1 className={`${isMobile ? 'text-2xl' : 'text-3xl'} font-bold mb-1 cyber-glow-text`}>API设置</h1>
-        <p className="text-cyber-muted text-sm mb-4 sm:mb-6">配置OVH API和通知设置</p>
+        <h1 className={`${isMobile ? 'text-2xl' : 'text-3xl'} font-bold mb-1 cyber-glow-text`}>设置</h1>
+        <p className="text-cyber-muted text-sm mb-4 sm:mb-6">配置访问密码和通知设置</p>
       </motion.div>
 
       {isLoading ? (
@@ -331,7 +427,7 @@ const SettingsPage = () => {
                 </div>
               </div>
               
-              <div className="cyber-grid-line pt-4">
+              <div className={`cyber-grid-line pt-4 ${accountFieldsHidden ? 'hidden' : ''}`}>
                 <h2 className={`${isMobile ? 'text-lg' : 'text-xl'} font-bold mb-3 sm:mb-4`}>OVH API 凭据</h2>
                 
                 <div className="space-y-3 sm:space-y-4">
@@ -455,7 +551,7 @@ const SettingsPage = () => {
                 </div>
               </div>
               
-              <div className="cyber-grid-line pt-4">
+              <div className={`cyber-grid-line pt-4 ${accountFieldsHidden ? 'hidden' : ''}`}>
                 <h2 className="text-xl font-bold mb-4">区域设置</h2>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -752,11 +848,24 @@ const SettingsPage = () => {
               <h2 className="text-lg font-bold mb-4">连接状态</h2>
               
               <div className="space-y-4">
-                <div className="flex items-center space-x-2">
-                  <div className={`w-3 h-3 rounded-full ${isAuthenticated ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></div>
-                  <span className={isAuthenticated ? 'text-green-400' : 'text-red-400'}>
-                    {isAuthenticated ? 'API 已连接' : 'API 未连接'}
-                  </span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-3 h-3 rounded-full ${apiKeyValid ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></div>
+                    <span className={`${apiKeyValid ? 'text-green-400' : 'text-red-400'} text-sm`}>访问密码</span>
+                  </div>
+                  <span className="text-xs text-cyber-muted">{apiKeyValid === null ? '检测中' : apiKeyValid ? '已通过' : '未设置或不匹配'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-3 h-3 rounded-full ${ovhAuthValid ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></div>
+                    <span className={`${ovhAuthValid ? 'text-green-400' : 'text-red-400'} text-sm`}>OVH API</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-cyber-muted">{ovhAuthValid === null ? '检测中' : ovhAuthValid ? '已连接' : '未连接'}</span>
+                    <button type="button" className="cyber-button h-7 px-2 text-xs" onClick={async () => { const valid = await checkAuthentication(); setOvhAuthValid(!!valid); }}>
+                      重新验证
+                    </button>
+                  </div>
                 </div>
                 
                 <div className="cyber-grid-line pt-4">
@@ -767,90 +876,6 @@ const SettingsPage = () => {
                     </p>
                   </div>
                   
-                  <h3 className="font-medium mb-2">获取 OVH API 密钥</h3>
-                  <p className="text-cyber-muted text-sm mb-3">
-                    您需要从 OVH API 控制台获取 APP KEY、APP SECRET 和 CONSUMER KEY 才能使用本服务。
-                  </p>
-                  
-                  <div className="space-y-2">
-                    <p className="text-xs text-cyber-muted font-semibold mb-2">选择您的区域：</p>
-                    
-                    <a 
-                      href="https://eu.api.ovh.com/createToken/" 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="cyber-button text-xs w-full inline-flex items-center justify-center h-9"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1.5 flex-shrink-0">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                        <polyline points="15 3 21 3 21 9"></polyline>
-                        <line x1="10" y1="14" x2="21" y2="3"></line>
-                      </svg>
-                      🇪🇺 欧洲 (ovh-eu) - eu.api.ovh.com
-                    </a>
-                    
-                    <a 
-                      href="https://api.us.ovhcloud.com/createToken/" 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="cyber-button text-xs w-full inline-flex items-center justify-center h-9"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1.5 flex-shrink-0">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                        <polyline points="15 3 21 3 21 9"></polyline>
-                        <line x1="10" y1="14" x2="21" y2="3"></line>
-                      </svg>
-                      🇺🇸 美国 (ovh-us) - api.us.ovhcloud.com
-                    </a>
-                    
-                    <a 
-                      href="https://ca.api.ovh.com/createToken/" 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="cyber-button text-xs w-full inline-flex items-center justify-center h-9"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1.5 flex-shrink-0">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                        <polyline points="15 3 21 3 21 9"></polyline>
-                        <line x1="10" y1="14" x2="21" y2="3"></line>
-                      </svg>
-                      🇨🇦 加拿大 (ovh-ca) - ca.api.ovh.com
-                    </a>
-                  </div>
-                  
-                  <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 mt-3">
-                    <p className="text-xs text-blue-300 font-semibold mb-1">💡 重要提示</p>
-                    <ul className="text-xs text-blue-200 space-y-1">
-                      <li>• 美国区请选择 <code className="bg-blue-500/20 px-1 py-0.5 rounded">ovh-us</code> 并访问 api.us.ovhcloud.com</li>
-                      <li>• Endpoint值请填写 ovh-eu / ovh-us / ovh-ca（不是完整URL）</li>
-                      <li>• Zone值对应填写 IE / US / CA</li>
-                    </ul>
-                  </div>
-                </div>
-                
-                <div className="cyber-grid-line pt-4">
-                  <h3 className="font-medium mb-2">所需权限 (Rights)</h3>
-                  <p className="text-xs text-cyan-400 mb-3">
-                    💡 在 OVH 创建 Token 时，请为每个 HTTP 方法添加 <code className="bg-cyan-500/20 px-1 py-0.5 rounded">/*</code> 完全放开权限：
-                  </p>
-                  <div className="text-cyber-muted text-sm space-y-2 bg-cyber-dark/50 p-3 rounded border border-cyber-accent/20">
-                    <div className="grid grid-cols-[80px_1fr] gap-3 items-center">
-                      <div className="font-mono text-cyber-accent font-semibold">GET</div>
-                      <div className="font-mono">/*</div>
-                    </div>
-                    <div className="grid grid-cols-[80px_1fr] gap-3 items-center">
-                      <div className="font-mono text-cyber-accent font-semibold">POST</div>
-                      <div className="font-mono">/*</div>
-                    </div>
-                    <div className="grid grid-cols-[80px_1fr] gap-3 items-center">
-                      <div className="font-mono text-cyber-accent font-semibold">PUT</div>
-                      <div className="font-mono">/*</div>
-                    </div>
-                    <div className="grid grid-cols-[80px_1fr] gap-3 items-center">
-                      <div className="font-mono text-cyber-accent font-semibold">DELETE</div>
-                      <div className="font-mono">/*</div>
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
@@ -859,6 +884,7 @@ const SettingsPage = () => {
             <div className="mt-6">
               <CacheManager />
             </div>
+
           </div>
         </div>
       )}
@@ -873,7 +899,7 @@ const SettingsPage = () => {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setShowErrorHistoryDialog(false)}
-                className="absolute inset-0 bg-black/70 backdrop-blur-md pointer-events-auto"
+                className="absolute inset-0 bg-black/70 backdrop-blur-sm pointer-events-auto"
               />
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}

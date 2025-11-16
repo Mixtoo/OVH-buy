@@ -110,10 +110,12 @@ const ServersPage = () => {
   const [availability, setAvailability] = useState<Record<string, Record<string, string>>>({});
   // 为每个服务器的数据中心选择状态设置映射
   const [selectedDatacenters, setSelectedDatacenters] = useState<Record<string, Record<string, boolean>>>({});
+  const [selectedDcOrder, setSelectedDcOrder] = useState<Record<string, string[]>>({});
   // 用于跟踪当前选中的服务器
   const [selectedServer, setSelectedServer] = useState<string | null>(null);
   // 保存每个服务器的选中选项
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string[]>>({});
+  const [draggingDc, setDraggingDc] = useState<{ planCode: string; dc: string } | null>(null);
   // 保存每个服务器的价格信息（按数据中心存储）
   const [serverPrices, setServerPrices] = useState<Record<string, Record<string, {
     loading: boolean;
@@ -733,18 +735,25 @@ const ServersPage = () => {
     if (event) {
       event.stopPropagation();
     }
-    
+    const isSelected = !!(selectedDatacenters[serverPlanCode]?.[datacenter]);
+    const nextSelected = !isSelected;
+
     setSelectedDatacenters(prev => {
-      if (!prev[serverPlanCode]) {
-        prev[serverPlanCode] = {};
+      const serverState = prev[serverPlanCode] ? { ...prev[serverPlanCode] } : {};
+      serverState[datacenter] = nextSelected;
+      return { ...prev, [serverPlanCode]: serverState };
+    });
+
+    setSelectedDcOrder(prev => {
+      const current = prev[serverPlanCode] ? [...prev[serverPlanCode]] : [];
+      const dcLower = datacenter.toLowerCase();
+      if (nextSelected) {
+        if (!current.includes(dcLower)) current.push(dcLower);
+      } else {
+        const idx = current.indexOf(dcLower);
+        if (idx >= 0) current.splice(idx, 1);
       }
-      return {
-        ...prev,
-        [serverPlanCode]: {
-          ...prev[serverPlanCode],
-          [datacenter]: !prev[serverPlanCode]?.[datacenter]
-        }
-      };
+      return { ...prev, [serverPlanCode]: current };
     });
   };
 
@@ -788,12 +797,33 @@ const ServersPage = () => {
       
       return newServerState;
     });
+
+    setSelectedDcOrder(prev => {
+      const planCodeLower = serverPlanCode.toLowerCase();
+      const ordered: string[] = [];
+      Object.entries(DATACENTER_REGIONS).forEach(([_, dcCodes]) => {
+        OVH_DATACENTERS
+          .filter(dc => dcCodes.includes(dc.code))
+          .filter(dc => {
+            if (planCodeLower.includes('-sgp')) return dc.code === 'sgp';
+            if (planCodeLower.includes('-syd')) return dc.code === 'syd';
+            if (planCodeLower.includes('-mum')) return dc.code === 'mum';
+            return true;
+          })
+          .forEach(dc => {
+            const dcLower = dc.code.toLowerCase();
+            if (!ordered.includes(dcLower)) ordered.push(dcLower);
+          });
+      });
+      return { ...prev, [serverPlanCode]: selected ? ordered : [] };
+    });
   };
 
   // 获取特定服务器已选中的数据中心列表
   const getSelectedDatacentersList = (serverPlanCode: string): string[] => {
+    const ordered = selectedDcOrder[serverPlanCode] || [];
+    if (ordered.length > 0) return ordered;
     if (!selectedDatacenters[serverPlanCode]) return [];
-    
     return Object.entries(selectedDatacenters[serverPlanCode])
       .filter(([_, selected]) => selected)
       .map(([dc]) => dc.toLowerCase());
@@ -1048,16 +1078,12 @@ const ServersPage = () => {
       console.log("用户选择的配置详情:", formattedOptions);
       console.log("提交的配置选项:", userSelectedOptions);
 
-      // 为每个选中的数据中心创建一个抢购请求（转换数据中心代码）
-      const promises = datacenters.map(datacenter => 
-        api.post(`/queue`, {
-          planCode: server.planCode,
-          datacenter: convertDisplayDcToApiDc(datacenter),  // 转换为OVH API代码
-          options: userSelectedOptions,
-        })
-      );
-      
-      await Promise.all(promises);
+      const apiDatacenters = datacenters.map(dc => convertDisplayDcToApiDc(dc));
+      await api.post(`/queue`, {
+        planCode: server.planCode,
+        datacenters: apiDatacenters,
+        options: userSelectedOptions,
+      });
       
       // 构建成功消息，包含用户选择的配置详情
       let successMessage = `已将 ${server.planCode} 添加到 ${datacenters.length} 个数据中心的抢购队列`;
@@ -2168,6 +2194,41 @@ const ServersPage = () => {
                           </div>
                         );
                       })}
+                      {(() => {
+                        const list = selectedDcOrder[server.planCode] || [];
+                        if (list.length === 0) return null;
+                        return (
+                          <div className="mt-3">
+                            <div className="text-[11px] font-medium text-cyber-secondary mb-1.5">拖动标签以设置优先级</div>
+                            <div className="flex flex-wrap gap-2">
+                              {list.map(dc => (
+                                <div
+                                  key={dc}
+                                  draggable
+                                  onDragStart={() => setDraggingDc({ planCode: server.planCode, dc })}
+                                  onDragEnd={() => setDraggingDc(null)}
+                                  onDragOver={(e) => {
+                                    e.preventDefault();
+                                    if (!draggingDc || draggingDc.planCode !== server.planCode || draggingDc.dc === dc) return;
+                                    setSelectedDcOrder(prev => {
+                                      const cur = [...(prev[server.planCode] || [])];
+                                      const from = cur.indexOf(draggingDc.dc);
+                                      const to = cur.indexOf(dc);
+                                      if (from === -1 || to === -1) return prev;
+                                      cur.splice(from, 1);
+                                      cur.splice(to, 0, draggingDc.dc);
+                                      return { ...prev, [server.planCode]: cur };
+                                    });
+                                  }}
+                                  className={`px-3 py-1.5 text-[11px] rounded-md border bg-cyber-accent/10 border-cyber-accent/40 text-cyber-accent cursor-move ${draggingDc && draggingDc.planCode === server.planCode && draggingDc.dc === dc ? 'opacity-70' : ''}`}
+                                >
+                                  {dc.toUpperCase()}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 </CardContent>
@@ -2493,6 +2554,41 @@ const ServersPage = () => {
                         </div>
                       );
                     })}
+                    {(() => {
+                      const list = selectedDcOrder[server.planCode] || [];
+                      if (list.length === 0) return null;
+                      return (
+                        <div className="mt-3">
+                          <div className="text-[11px] font-medium text-cyber-secondary mb-1.5">拖动标签以设置优先级</div>
+                          <div className="flex flex-wrap gap-2">
+                            {list.map(dc => (
+                              <div
+                                key={dc}
+                                draggable
+                                onDragStart={() => setDraggingDc({ planCode: server.planCode, dc })}
+                                onDragEnd={() => setDraggingDc(null)}
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                  if (!draggingDc || draggingDc.planCode !== server.planCode || draggingDc.dc === dc) return;
+                                  setSelectedDcOrder(prev => {
+                                    const cur = [...(prev[server.planCode] || [])];
+                                    const from = cur.indexOf(draggingDc.dc);
+                                    const to = cur.indexOf(dc);
+                                    if (from === -1 || to === -1) return prev;
+                                    cur.splice(from, 1);
+                                    cur.splice(to, 0, draggingDc.dc);
+                                    return { ...prev, [server.planCode]: cur };
+                                  });
+                                }}
+                                className={`px-3 py-1.5 text-[11px] rounded-md border bg-cyber-accent/10 border-cyber-accent/40 text-cyber-accent cursor-move ${draggingDc && draggingDc.planCode === server.planCode && draggingDc.dc === dc ? 'opacity-70' : ''}`}
+                              >
+                                {dc.toUpperCase()}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>

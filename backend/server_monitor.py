@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 class ServerMonitor:
     """服务器监控类"""
     
-    def __init__(self, check_availability_func, send_notification_func, add_log_func):
+    def __init__(self, check_availability_func, send_notification_func, add_log_func, account_id=None):
         """
         初始化监控器
         
@@ -32,6 +32,7 @@ class ServerMonitor:
         self.running = False  # 运行状态
         self.check_interval = 5  # 检查间隔（秒），默认5秒
         self.thread = None
+        self.account_id = account_id
         
         # 价格缓存：key = f"{plan_code}|{sorted_options}"，value = {"price": str, "timestamp": float}
         self.price_cache = {}
@@ -412,10 +413,13 @@ class ServerMonitor:
                                     price_payload = {
                                         "plan_code": plan_code,
                                         "datacenter": first_available_dc,
-                                        "options": order_options
+                                        "options": order_options,
+                                        "accountId": self.account_id
                                     }
-                                    
-                                    price_resp = requests.post(price_api_url, json=price_payload, timeout=15)
+                                    headers = {}
+                                    if self.account_id:
+                                        headers["X-OVH-Account"] = self.account_id
+                                    price_resp = requests.post(price_api_url, json=price_payload, headers=headers, timeout=15)
                                     
                                     # 如果价格查询成功，标记plan_code为有效
                                     if price_resp.status_code == 200:
@@ -452,6 +456,8 @@ class ServerMonitor:
                                 "skipDuplicateCheck": skip_duplicate_check  # 如果设置了数量，跳过2分钟限制
                             }
                             headers = {"X-API-Key": API_SECRET_KEY}
+                            if self.account_id:
+                                headers["X-OVH-Account"] = self.account_id
                             api_url = "http://127.0.0.1:19998/api/config-sniper/quick-order"
                             
                             if is_valid_plan_code:

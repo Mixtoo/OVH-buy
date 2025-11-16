@@ -1,7 +1,31 @@
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
+import { useAPI } from "@/context/APIContext";
+import { api, getApiSecretKey } from "@/utils/apiClient";
 
 const APINotice = () => {
+  const { isAuthenticated } = useAPI();
+  const [passwordValid, setPasswordValid] = useState<boolean | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const key = getApiSecretKey();
+        if (!key) {
+          setPasswordValid(false);
+          return;
+        }
+        await api.get('/settings');
+        setPasswordValid(true);
+      } catch {
+        setPasswordValid(false);
+      }
+    })();
+  }, []);
+  const showPasswordNotice = passwordValid === false;
+  const showAPINotice = passwordValid === true && !isAuthenticated;
+  if (!showPasswordNotice && !showAPINotice) return null;
+  const targetLink = showPasswordNotice ? '/settings' : '/api-accounts';
   return (
     <motion.div
       initial={{ opacity: 0, y: -20 }}
@@ -27,13 +51,13 @@ const APINotice = () => {
           <line x1="12" y1="17" x2="12.01" y2="17"></line>
         </svg>
         <div className="text-cyber-muted">
-          您尚未配置 OVH API，某些功能将无法正常使用。
+          {showPasswordNotice ? '尚未配置访问密码，无法进入面板或调用后端接口。' : '您尚未配置 OVH API，某些功能将无法正常使用。'}
         </div>
         <Link
-          to="/settings"
+          to={targetLink}
           className="cyber-button text-xs px-3 py-1 flex items-center justify-center"
         >
-          配置 API
+          {showPasswordNotice ? '配置访问密码' : '配置 API'}
         </Link>
       </div>
     </motion.div>

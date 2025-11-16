@@ -7,8 +7,16 @@ API密钥配置
 import os
 from dotenv import load_dotenv
 
-# 加载 .env 文件
-load_dotenv()
+# 加载 .env 文件（优先加载 backend 目录下的 .env）
+try:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    ENV_PATH = os.path.join(BASE_DIR, '.env')
+    if os.path.exists(ENV_PATH):
+        load_dotenv(dotenv_path=ENV_PATH)
+    else:
+        load_dotenv()
+except Exception:
+    load_dotenv()
 
 # API通信密钥
 # 从环境变量读取，必须与前端设置页面中的密钥保持一致

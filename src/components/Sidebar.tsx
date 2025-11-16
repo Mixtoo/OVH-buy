@@ -10,8 +10,9 @@ interface SidebarProps {
 
 const Sidebar = ({ onToggle, isOpen }: SidebarProps) => {
   const location = useLocation();
-  const { isAuthenticated } = useAPI();
+  const { isAuthenticated, accounts, currentAccountId, setCurrentAccount } = useAPI();
   const isMobile = useIsMobile();
+  const currentZone = (accounts.find((acc: any) => acc?.id === currentAccountId)?.zone) || '';
   
   const menuItems = [
     { path: "/", icon: "bar-chart-2", label: "仪表盘" },
@@ -21,10 +22,11 @@ const Sidebar = ({ onToggle, isOpen }: SidebarProps) => {
     { path: "/monitor", icon: "bell", label: "服务器监控" },
     { path: "/vps-monitor", icon: "cloud", label: "VPS补货通知" },
     { path: "/server-control", icon: "terminal", label: "服务器控制" },
-    { path: "/account-management", icon: "user", label: "账户管理" },
+    { path: "/account-management", icon: "user", label: "账户信息" },
+    { path: "/api-accounts", icon: "settings", label: "API账户管理" },
     { path: "/history", icon: "clock", label: "抢购历史" },
     { path: "/logs", icon: "file-text", label: "详细日志" },
-    { path: "/settings", icon: "settings", label: "API设置" },
+    { path: "/settings", icon: "settings", label: "系统设置" },
   ];
 
   const isActive = (path: string) => {
@@ -177,14 +179,30 @@ const Sidebar = ({ onToggle, isOpen }: SidebarProps) => {
       </div>
 
       <div className="border-t border-cyber-accent/20 p-4 bg-cyber-bg/30">
-        <div className="flex items-center justify-between">
+        <div className="space-y-3">
           <div className="text-xs">
             <div className={`flex items-center ${isAuthenticated ? 'text-green-400' : 'text-cyber-muted'}`}>
               <span className={`w-2 h-2 rounded-full mr-2 ${isAuthenticated ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></span>
               <span>{isAuthenticated ? 'API已连接' : 'API未连接'}</span>
             </div>
           </div>
-          <div className="text-cyber-muted text-xs">v2.0.0</div>
+          <div className="flex items-center justify-between">
+            <select
+              className="text-xs bg-cyber-bg/50 border border-cyber-accent/30 rounded px-2 py-1 text-cyber-text"
+              value={currentAccountId || ''}
+              onChange={(e) => setCurrentAccount(e.target.value)}
+            >
+              {accounts.map((acc: any) => (
+                <option key={acc.id} value={acc.id}>{acc.alias || acc.id}</option>
+              ))}
+            </select>
+            {currentZone && (
+              <span className="ml-2 px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">
+                {currentZone}
+              </span>
+            )}
+            <div className="text-cyber-muted text-xs">v2.0.0</div>
+          </div>
         </div>
       </div>
     </div>
