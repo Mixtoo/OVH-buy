@@ -961,33 +961,33 @@ const QueuePage = () => {
                     )}
                     <div className="flex-grow">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">{item.planCode}</span>
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{item.planCode}</span>
                         {(() => {
                           const s = servers.find(ss => ss.planCode === item.planCode);
                           const name = s?.name;
                           if (!name) return null;
                           return (
-                            <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">{name}</span>
+                            <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{name}</span>
                           );
                         })()}
                         {(() => {
                           const list = Array.isArray(item.datacenters) && item.datacenters.length > 0 ? item.datacenters : (item.datacenter ? [item.datacenter] : []);
                           if (list.length > 1) {
                             return (
-                              <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">机房优先级：{list.map(dc => dc.toUpperCase()).join(' > ')}</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{list.map(dc => dc.toUpperCase()).join(' › ')}</span>
                             );
                           }
                           if (list.length === 1) {
                             return (
-                              <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">机房：{list[0].toUpperCase()}</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{list[0].toUpperCase()}</span>
                             );
                           }
                           return null;
                         })()}
                         {Array.isArray(item.options) && item.options.length > 0 && (
-                          <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">含 {item.options.length} 个可选配置</span>
+                          <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">含 {item.options.length} 个可选配置</span>
                         )}
-                        <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30 flex items-center gap-1">
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30 flex items-center gap-1">
                           <ShoppingCart size={12} /> {Math.min(item.purchased || 0, item.quantity || 0)} / {item.quantity || 0}
                         </span>
                       </div>
@@ -1006,12 +1006,12 @@ const QueuePage = () => {
                       )}
                     </div>
                     <div className="flex items-center gap-2 mt-2 sm:mt-0 flex-shrink-0">
-                      <span className="px-2 py-0.5 text-xs bg-slate-600/30 text-slate-200 rounded-full">账户：{getAccountLabel(item.accountId)}</span>
+                      <span className="px-1.5 py-0.5 text-[10px] font-mono bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30 rounded-md">账户：{getAccountLabel(item.accountId)}</span>
                       {(() => {
                         const zone = getAccountZone(item.accountId);
                         if (!zone) return null;
                         return (
-                          <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">
+                          <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">
                             {zone}
                           </span>
                         );
@@ -1085,46 +1085,49 @@ const QueuePage = () => {
                   >
                     <div className="flex-grow">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">{item.planCode}</span>
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{item.planCode}</span>
                         {(() => {
                           const s = servers.find(ss => ss.planCode === item.planCode);
                           const name = s?.name;
                           if (!name) return null;
                           return (
-                            <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">{name}</span>
+                            <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{name}</span>
                           );
                         })()}
                         {(() => {
                           const list = Array.isArray(item.datacenters) && item.datacenters.length > 0 ? item.datacenters : (item.datacenter ? [item.datacenter] : []);
                           if (list.length > 1) {
                             return (
-                              <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">机房优先级：{list.map(dc => dc.toUpperCase()).join(' > ')}</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{list.map(dc => dc.toUpperCase()).join(' › ')}</span>
                             );
                           }
                           if (list.length === 1) {
                             return (
-                              <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">机房：{list[0].toUpperCase()}</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{list[0].toUpperCase()}</span>
                             );
                           }
                           return null;
                         })()}
                         {Array.isArray(item.options) && item.options.length > 0 && (
-                          <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">含 {item.options.length} 个可选配置</span>
+                          <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">含 {item.options.length} 个可选配置</span>
                         )}
-                        <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30 flex items-center gap-1">
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30 flex items-center gap-1">
                           <ShoppingCart size={12} /> {Math.min(item.purchased || 0, item.quantity || 0)} / {item.quantity || 0}
                         </span>
                       </div>
                       <p className="text-xs text-cyber-muted">状态: 已完成 | 创建于: {new Date(item.createdAt || Date.now()).toLocaleString()}</p>
+                      {Array.isArray(item.options) && item.options.length > 0 && (
+                        <p className="text-xs text-cyber-muted mt-1">📦 可选配置: {item.options.join(', ')}</p>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 mt-2 sm:mt-0 flex-shrink-0">
                       <span className="text-xs px-2 py-1 rounded-full font-medium bg-blue-500/20 text-blue-400">已完成</span>
-                      <span className="px-2 py-0.5 text-xs bg-slate-600/30 text-slate-200 rounded-full">账户：{getAccountLabel(item.accountId)}</span>
+                      <span className="px-1.5 py-0.5 text-[10px] font-mono bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30 rounded-md">账户：{getAccountLabel(item.accountId)}</span>
                       {(() => {
                         const zone = getAccountZone(item.accountId);
                         if (!zone) return null;
                         return (
-                          <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">
+                          <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">
                             {zone}
                           </span>
                         );
@@ -1185,19 +1188,33 @@ const QueuePage = () => {
                   >
                     <div className="flex-grow">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">{item.planCode}</span>
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{item.planCode}</span>
                         {(() => {
                           const s = servers.find(ss => ss.planCode === item.planCode);
                           const name = s?.name;
                           if (!name) return null;
                           return (
-                            <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">{name}</span>
+                            <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{name}</span>
                           );
                         })()}
+                        {(() => {
+                          const list = Array.isArray(item.datacenters) && item.datacenters.length > 0 ? item.datacenters : (item.datacenter ? [item.datacenter] : []);
+                          if (list.length > 1) {
+                            return (
+                              <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{list.map(dc => dc.toUpperCase()).join(' › ')}</span>
+                            );
+                          }
+                          if (list.length === 1) {
+                            return (
+                              <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">{list[0].toUpperCase()}</span>
+                            );
+                          }
+                          return null;
+                        })()}
                         {Array.isArray(item.options) && item.options.length > 0 && (
-                          <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">含 {item.options.length} 个可选配置</span>
+                          <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">含 {item.options.length} 个可选配置</span>
                         )}
-                        <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30 flex items-center gap-1">
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30 flex items-center gap-1">
                           <ShoppingCart size={12} /> {Math.min(item.purchased || 0, item.quantity || 0)} / {item.quantity || 0}
                         </span>
                       </div>
@@ -1208,12 +1225,12 @@ const QueuePage = () => {
                     </div>
                     <div className="flex items-center gap-2 mt-2 sm:mt-0 flex-shrink-0">
                       <span className="text-xs px-2 py-1 rounded-full font-medium bg-yellow-500/20 text-yellow-400">已暂停</span>
-                      <span className="px-2 py-0.5 text-xs bg-slate-600/30 text-slate-200 rounded-full">账户：{getAccountLabel(item.accountId)}</span>
+                      <span className="px-1.5 py-0.5 text-[10px] font-mono bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30 rounded-md">账户：{getAccountLabel(item.accountId)}</span>
                       {(() => {
                         const zone = getAccountZone(item.accountId);
                         if (!zone) return null;
                         return (
-                          <span className="px-2 py-0.5 text-[10px] rounded-md bg-cyber-accent/15 text-cyber-accent border border-cyber-accent/30">
+                          <span className="px-1.5 py-0.5 text-[10px] font-mono rounded-md bg-cyber-grid/10 text-cyber-text border border-cyber-accent/30">
                             {zone}
                           </span>
                         );
