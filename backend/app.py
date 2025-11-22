@@ -7209,10 +7209,28 @@ def change_boot_mode(service_name):
         
         add_log("INFO", f"[Boot] 切换服务器 {service_name} 启动模式到 {boot_id}", "server_control")
         
+        # 处理救援模式的 SSH 公钥与通知邮箱（如果提供）
+        ssh_key = None
+        if data.get('useGlobalSshKey'):
+            try:
+                if config and config.get('sshKey'):
+                    ssh_key = config.get('sshKey')
+            except Exception:
+                pass
+        if not ssh_key:
+            ssh_key = (data.get('sshKey') or '').strip() or None
+
+        params = { 'bootId': boot_id }
+        if ssh_key:
+            params['rescueSshKey'] = ssh_key
+        rescue_mail = (data.get('rescueMail') or '').strip()
+        if rescue_mail:
+            params['rescueMail'] = rescue_mail
+
         # 修改服务器启动配置
         result = client.put(
             f'/dedicated/server/{service_name}',
-            bootId=boot_id
+            **params
         )
         
         add_log("INFO", f"[Boot] 启动模式切换成功，需要重启服务器生效", "server_control")
@@ -7220,7 +7238,11 @@ def change_boot_mode(service_name):
         return jsonify({
             "success": True,
             "message": "启动模式已切换，需要重启服务器生效",
-            "bootId": boot_id
+            "bootId": boot_id,
+            "applied": {
+                "sshKey": bool(ssh_key),
+                "rescueMail": bool(rescue_mail)
+            }
         })
         
     except Exception as e:

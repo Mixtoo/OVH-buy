@@ -252,6 +252,9 @@ const ServerControlPage: React.FC = () => {
   const [showBootModeDialog, setShowBootModeDialog] = useState(false);
   const [bootModes, setBootModes] = useState<BootMode[]>([]);
   const [loadingBootModes, setLoadingBootModes] = useState(false);
+  const [rescueSshKeyInput, setRescueSshKeyInput] = useState("");
+  const [rescueUseGlobalSshKey, setRescueUseGlobalSshKey] = useState(false);
+  const [rescueMailInput, setRescueMailInput] = useState("");
 
   // IPMI链接模态框
   const [showIpmiLinkDialog, setShowIpmiLinkDialog] = useState(false);
@@ -1895,6 +1898,14 @@ const ServerControlPage: React.FC = () => {
       if (response.data.success) {
         setBootModes(response.data.bootModes);
         setShowBootModeDialog(true);
+        try {
+          const resp = await api.get('/settings');
+          const cfg = resp.data || {};
+          const hasSsh = !!(cfg.sshKey && String(cfg.sshKey).trim().length > 0);
+          setRescueUseGlobalSshKey(hasSsh);
+        } catch {}
+        setRescueSshKeyInput("");
+        setRescueMailInput("");
       }
     } catch (error: any) {
       console.error('获取启动模式失败:', error);
@@ -1918,10 +1929,21 @@ const ServerControlPage: React.FC = () => {
     if (!confirmed) return;
 
     try {
-      // 1. 切换启动模式
-      const response = await api.put(`/server-control/${selectedServer.serviceName}/boot-mode`, {
-        bootId
-      });
+      const selectedMode = bootModes.find(m => m.id === bootId);
+      const isRescue = selectedMode?.bootType?.toLowerCase().includes('rescue');
+      const payload: any = { bootId };
+      if (isRescue) {
+        if (rescueUseGlobalSshKey) {
+          payload.useGlobalSshKey = true;
+        } else if (rescueSshKeyInput.trim()) {
+          payload.sshKey = rescueSshKeyInput.trim();
+        }
+        if (rescueMailInput.trim()) {
+          payload.rescueMail = rescueMailInput.trim();
+        }
+      }
+
+      const response = await api.put(`/server-control/${selectedServer.serviceName}/boot-mode`, payload);
       
       if (response.data.success) {
         showToast({ type: 'success', title: '启动模式已切换' });
@@ -4024,11 +4046,18 @@ const ServerControlPage: React.FC = () => {
                         key={mode.id}
                         className={`p-4 border rounded-lg transition-all text-left ${
                           mode.active
-                            ? 'border-cyber-accent bg-cyber-accent/10 cursor-default'
+                            ? (mode.bootType.toLowerCase().includes('rescue')
+                              ? 'border-cyber-accent bg-cyber-accent/10 cursor-pointer'
+                              : 'border-cyber-accent bg-cyber-accent/10 cursor-default')
                             : 'border-cyber-accent/20 hover:border-cyber-accent/40 hover:bg-cyber-grid/30 cursor-pointer'
                         }`}
-                        onClick={() => !mode.active && changeBootMode(mode.id)}
-                        disabled={mode.active}>
+                        onClick={() => {
+                          const isRescue = mode.bootType.toLowerCase().includes('rescue');
+                          if (!mode.active || isRescue) {
+                            changeBootMode(mode.id);
+                          }
+                        }}
+                        disabled={mode.active && !mode.bootType.toLowerCase().includes('rescue')}>
                         <div className="flex flex-col items-center text-center gap-2">
                           <Icon className={`w-8 h-8 ${mode.active ? 'text-cyber-accent' : 'text-cyber-muted'}`} />
                           <div className="w-full">
@@ -4045,15 +4074,69 @@ const ServerControlPage: React.FC = () => {
                     );
                   })}
                 </div>
+
+                {bootModes.some(m => m.bootType?.toLowerCase().includes('rescue')) && (
+                  <div className="mt-4 border-t border-cyber-accent/20 pt-4">
+                    <h4 className="text-sm font-semibold text-cyber-text mb-2">救援模式参数（可选）</h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-cyber-text font-medium mb-2">SSH 公钥</label>
+                        <textarea
+                          placeholder="ssh-rsa 或 ssh-ed25519 公钥行"
+                          value={rescueSshKeyInput}
+                          onChange={(e) => setRescueSshKeyInput(e.target.value)}
+                          disabled={rescueUseGlobalSshKey}
+                          className={`w-full px-4 py-3 bg-cyber-bg border-2 border-cyber-accent/40 rounded-lg text-cyber-text placeholder-cyber-muted focus:border-cyber-accent focus:ring-2 focus:ring-cyber-accent/30 hover:border-cyber-accent/60 transition-all ${rescueUseGlobalSshKey ? 'opacity-60 cursor-not-allowed' : ''}`}
+                          style={{
+                            background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.95) 100%)'
+                          }}
+                          rows={3}
+                        />
+                        <label className="flex items-center gap-2 mt-2">
+                          <input
+                            type="checkbox"
+                            checked={rescueUseGlobalSshKey}
+                            onChange={(e) => setRescueUseGlobalSshKey(e.target.checked)}
+                            className="w-4 h-4 accent-cyan-500"
+                          />
+                          <span className="text-sm text-cyber-text">使用设置页面里的全局SSH公钥</span>
+                        </label>
+                      </div>
+                      <div>
+                        <label className="block text-cyber-text font-medium mb-2">救援模式通知邮箱</label>
+                        <input
+                          type="email"
+                          placeholder="用于接收救援模式登录信息"
+                          value={rescueMailInput}
+                          onChange={(e) => setRescueMailInput(e.target.value)}
+                          className="w-full px-4 py-3 bg-cyber-bg border-2 border-cyber-accent/40 rounded-lg text-cyber-text placeholder-cyber-muted focus:border-cyber-accent focus:ring-2 focus:ring-cyber-accent/30 hover:border-cyber-accent/60 transition-all"
+                          style={{
+                            background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.95) 100%)'
+                          }}
+                        />
+                      </div>
+
+                      <div className="flex justify-end">
+                        {(() => {
+                          const rescueMode = bootModes.find(m => m.bootType?.toLowerCase().includes('rescue'));
+                          if (!rescueMode) return null;
+                          const label = rescueMode.active ? '应用救援参数' : '切换到救援并应用参数';
+                          return (
+                            <button
+                              onClick={() => changeBootMode(rescueMode.id)}
+                              className="px-4 py-2 bg-cyber-accent text-white rounded-md hover:bg-cyber-accent/80 transition-colors"
+                            >
+                              {label}
+                            </button>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div className="flex justify-end gap-3 mt-3 pt-3 border-t border-cyber-accent/20 flex-shrink-0">
-                <button
-                  onClick={() => setShowBootModeDialog(false)}
-                  className="px-4 py-2 border border-cyber-accent/30 rounded-md text-sm text-cyber-text hover:bg-cyber-accent/5 transition-colors">
-                  关闭
-                </button>
-              </div>
+              {/* 底部关闭按钮已移除，保留右上角关闭 */}
             </motion.div>
           </div>
         )}
