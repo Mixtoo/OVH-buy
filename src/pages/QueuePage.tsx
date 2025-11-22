@@ -379,22 +379,24 @@ const QueuePage = () => {
         const filtered = dcList.filter(dc => validDcs.includes(dc));
         const uniqueFiltered = Array.from(new Set(filtered));
         setVisibleDatacenters(uniqueFiltered);
-        setSelectedDatacenters([]);
-        const defaults = (server.defaultOptions || []).map(o => o.value);
-        if (defaults.length > 0) {
-          setSelectedOptions(prev => {
-            const set = new Set([...prev, ...defaults]);
-            return Array.from(set);
-          });
-        } else {
-          setSelectedOptions([]);
+        if (!editingItemId) {
+          setSelectedDatacenters([]);
+          const defaults = (server.defaultOptions || []).map(o => o.value);
+          if (defaults.length > 0 && selectedOptions.length === 0) {
+            setSelectedOptions(prev => {
+              const set = new Set([...prev, ...defaults]);
+              return Array.from(set);
+            });
+          }
+          setOptionsInput('');
         }
-        setOptionsInput('');
       } else {
         setVisibleDatacenters([]);
-        setSelectedDatacenters([]);
-        setSelectedOptions([]);
-        setOptionsInput('');
+        if (!editingItemId) {
+          setSelectedDatacenters([]);
+          setSelectedOptions([]);
+          setOptionsInput('');
+        }
         if (isAuthenticated) {
           (async () => {
             try {
@@ -409,13 +411,15 @@ const QueuePage = () => {
                 const filtered = dcList.filter(dc => validDcs.includes(dc));
                 const uniqueFiltered = Array.from(new Set(filtered));
                 setVisibleDatacenters(uniqueFiltered);
-                setSelectedDatacenters([]);
-                const defaults = (srv.defaultOptions || []).map(o => o.value);
-                if (defaults.length > 0) {
-                  setSelectedOptions(prev => {
-                    const set = new Set([...prev, ...defaults]);
-                    return Array.from(set);
-                  });
+                if (!editingItemId) {
+                  setSelectedDatacenters([]);
+                  const defaults = (srv.defaultOptions || []).map(o => o.value);
+                  if (defaults.length > 0 && selectedOptions.length === 0) {
+                    setSelectedOptions(prev => {
+                      const set = new Set([...prev, ...defaults]);
+                      return Array.from(set);
+                    });
+                  }
                 }
               }
             } catch {}
@@ -425,11 +429,13 @@ const QueuePage = () => {
     } else {
       setSelectedServer(null);
       setVisibleDatacenters([]);
-      setSelectedDatacenters([]);
-      setSelectedOptions([]);
-      setOptionsInput('');
+      if (!editingItemId) {
+        setSelectedDatacenters([]);
+        setSelectedOptions([]);
+        setOptionsInput('');
+      }
     }
-  }, [planCodeDebounced, servers, isAuthenticated]);
+  }, [planCodeDebounced, servers, isAuthenticated, editingItemId, selectedOptions.length]);
 
   // 不自动重置选项 - 用户可能只是修改了 planCode，应保留已选配置
   

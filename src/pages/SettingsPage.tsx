@@ -220,14 +220,12 @@ const SettingsPage = () => {
       } catch {
         setApiKeyValid(false);
       }
-      try {
-        const valid = await checkAuthentication();
-        setOvhAuthValid(!!valid);
-      } catch {
-        setOvhAuthValid(false);
-      }
     })();
   }, []);
+
+  useEffect(() => {
+    setOvhAuthValid(isAuthenticated);
+  }, [isAuthenticated]);
 
   // Handle input changes
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -397,7 +395,7 @@ const SettingsPage = () => {
                       value={formValues.apiSecretKey}
                       onChange={handleChange}
                       className="cyber-input w-full pr-10 text-sm"
-                      placeholder="输入访问密码（在后端.env文件中的API_SECRET_KEY）"
+                      placeholder="输入访问密码（在Docker设置的environment或后端.env文件中的API_SECRET_KEY）"
                       required
                     />
                     <button
@@ -419,7 +417,7 @@ const SettingsPage = () => {
                     </button>
                   </div>
                   <div className="text-xs text-cyan-400 mt-2 space-y-1">
-                    <p>💡 请在 <code className="bg-cyan-500/20 px-1 py-0.5 rounded">backend/.env</code> 文件中查找 <code className="bg-cyan-500/20 px-1 py-0.5 rounded">API_SECRET_KEY</code> 的值并复制到此处</p>
+                    <p>💡 请在Docker的 <code className="bg-cyan-500/20 px-1 py-0.5 rounded">environment</code> 参数或 <code className="bg-cyan-500/20 px-1 py-0.5 rounded">backend/.env</code> 文件中查找 <code className="bg-cyan-500/20 px-1 py-0.5 rounded">API_SECRET_KEY</code> 的值并复制到此处</p>
                     <p className="text-purple-300">
                       <strong>双重用途：</strong>① 前后端通信安全验证  ② 面板访问密码
                     </p>
