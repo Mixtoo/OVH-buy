@@ -1338,6 +1338,8 @@ def purchase_server(queue_item):
         save_data()
         update_stats()
         add_log("INFO", f"并发下单完成，总成功 {successes}/{remaining_to_buy}", "purchase")
+        if successes == 0:
+            queue_item["failureCount"] = int(queue_item.get("failureCount", 0)) + 1
         return successes
 
     except ovh.exceptions.APIError as api_e:
@@ -1347,6 +1349,7 @@ def purchase_server(queue_item):
             add_log("ERROR", f"错误发生时的购物车ID: {cart_id}", "purchase")
         if item_id:
             add_log("ERROR", f"错误发生时的基础商品ID: {item_id}", "purchase")
+        queue_item["failureCount"] = int(queue_item.get("failureCount", 0)) + 1
         _append_history(queue_item, "failed", (queue_item.get("datacenters") or [None])[0], None, None, error_msg, None)
         add_log("INFO", f"创建抢购历史(API失败) 任务ID: {queue_item['id']}", "purchase")
         save_data()
@@ -1361,6 +1364,7 @@ def purchase_server(queue_item):
             add_log("ERROR", f"错误发生时的购物车ID: {cart_id}", "purchase")
         if item_id:
             add_log("ERROR", f"错误发生时的基础商品ID: {item_id}", "purchase")
+        queue_item["failureCount"] = int(queue_item.get("failureCount", 0)) + 1
         _append_history(queue_item, "failed", (queue_item.get("datacenters") or [None])[0], None, None, error_msg, None)
         add_log("INFO", f"创建抢购历史(通用失败) 任务ID: {queue_item['id']}", "purchase")
         save_data()
@@ -1416,9 +1420,9 @@ def process_queue():
                     else:
                         item["nextAttemptAt"] = compute_next_attempt(item)
                 else:
-                    item["failureCount"] = int(item.get("failureCount", 0)) + 1
                     if int(item.get("failureCount", 0)) >= int(item.get("maxRetryCount", 50)):
-                        item["status"] = "failed"
+                        item["status"] = "paused"
+                        item["nextAttemptAt"] = 0
                     else:
                         item["nextAttemptAt"] = compute_next_attempt(item)
                 item["updatedAt"] = datetime.now().isoformat()
